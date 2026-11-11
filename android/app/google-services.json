@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "538448686358",
+    "project_id": "teduh-app",
+    "storage_bucket": "teduh-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:538448686358:android:a530d8f53aa0813a5bb437",
+        "android_client_info": {
+          "package_name": "com.example.teduh"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDWuXmbEPeca7yvRGonj8eqRlmkY6oGxc4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
