@@ -16,14 +16,21 @@ dependencies:
   google_fonts: ^6.2.1
   firebase_core: ^5.1.0
   firebase_auth: ^7.0.1
-  http: ^1.6.0
   cloud_firestore: ^7.1.0
+  google_sign_in: ^6.2.2
+  http: ^1.6.0
 
-  # Aksesibilitas & suara
+  geolocator: ^13.0.2
+  permission_handler: ^11.3.1
+
   shared_preferences: ^2.5.3
   speech_to_text: ^7.3.0
   flutter_tts: ^4.2.3
   audioplayers: ^6.5.0
+  image_picker: ^1.2.4
+  url_launcher: ^6.3.1
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
 
 dev_dependencies:
   flutter_test:
@@ -35,3 +42,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
+    - assets/data/
