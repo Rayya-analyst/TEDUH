@@ -237,12 +237,9 @@ class _ContextRecommendationCardState extends State<ContextRecommendationCard> {
                           horizontal: 16, vertical: 14),
                       child: Row(
                         children: [
-                          const Icon(Icons.volume_up_rounded,
-                              size: 18, color: Colors.white),
-                          const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'Lihat alasan & dengarkan penjelasan',
+                              'Lihat alasan',
                               style: GoogleFonts.poppins(
                                 fontSize: 12.5,
                                 fontWeight: FontWeight.w600,
