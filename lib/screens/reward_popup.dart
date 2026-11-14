@@ -1,15 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../services/user_points_service.dart';
+import '../services/user_profile_service.dart';
 import '../widgets/teduh_common.dart';
 
 Future<bool?> showActivityReward(
   BuildContext context, {
   required bool indoor,
-  String userName = 'Arsinka',
-  int points = 120,
-  int target = 200,
+  String? userName,
+  int? points,
+  int? target,
+  int earnedPoints = 20,
 }) {
+  final resolvedName = (userName != null &&
+          userName.trim().isNotEmpty &&
+          userName != 'Arsinka')
+      ? userName.trim()
+      : UserProfileService.instance.shortName;
+  final effectiveName = resolvedName.isNotEmpty ? resolvedName : 'Sobat TEDUH';
+  final effectivePoints = points ?? UserPointsService.instance.points;
+  final effectiveTarget = target ?? UserPointsService.instance.currentTarget;
+
   return showGeneralDialog<bool>(
     context: context,
     barrierDismissible: false,
@@ -18,9 +30,10 @@ Future<bool?> showActivityReward(
     transitionDuration: const Duration(milliseconds: 350),
     pageBuilder: (_, _, _) => _RewardView(
       indoor: indoor,
-      userName: userName,
-      points: points,
-      target: target,
+      userName: effectiveName,
+      points: effectivePoints,
+      target: effectiveTarget,
+      earnedPoints: earnedPoints,
     ),
     transitionBuilder: (_, anim, _, child) {
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
@@ -128,12 +141,14 @@ class _RewardView extends StatefulWidget {
   final String userName;
   final int points;
   final int target;
+  final int earnedPoints;
 
   const _RewardView({
     required this.indoor,
     required this.userName,
     required this.points,
     required this.target,
+    this.earnedPoints = 20,
   });
 
   @override
@@ -225,13 +240,41 @@ class _RewardViewState extends State<_RewardView>
                               ),
                             ),
                           ),
+                          if (widget.earnedPoints > 0) ...[
+                            const SizedBox(height: 8),
+                            _r(
+                              0.18,
+                              0.58,
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: t.chipBg,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                      color: t.chipText.withValues(alpha: 0.2)),
+                                ),
+                                child: Text(
+                                  '+${widget.earnedPoints} Poin Sehat Didapatkan',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: t.chipText,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 10),
                           _r(
                             0.2,
                             0.6,
                             Text(
-                              'Pantau poin, medali, badge, dan reward yang '
-                              'bisa kamu klaim setiap hari.',
+                              widget.earnedPoints > 0
+                                  ? 'Aktivitasmu berhasil diselesaikan! Terus kumpulkan '
+                                    'poin dan jaga kebugaran tubuh setiap hari.'
+                                  : 'Sesi diakhiri lebih awal. Selesaikan '
+                                    'seluruh langkah untuk mendapatkan poin.',
                               textAlign: TextAlign.center,
                               style: GoogleFonts.poppins(
                                 fontSize: 13,
@@ -326,7 +369,7 @@ class _RewardViewState extends State<_RewardView>
                       ),
                     ),
                     Text(
-                      'Contoh poin & pencapaian',
+                      'Akumulasi poin aktivitas fisikmu',
                       style: GoogleFonts.poppins(
                           fontSize: 11.5, color: const Color(0xFF7C8A82)),
                     ),

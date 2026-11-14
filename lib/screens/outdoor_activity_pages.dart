@@ -10,6 +10,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../services/user_points_service.dart';
+import '../services/user_profile_service.dart';
 import '../widgets/teduh_common.dart';
 import 'reward_popup.dart';
 
@@ -842,7 +844,7 @@ class _OutdoorActivitySessionPageState
       });
       _announceStep();
     } else {
-      _finish();
+      _finish(completed: true);
     }
   }
 
@@ -869,11 +871,24 @@ class _OutdoorActivitySessionPageState
     }
   }
 
-  Future<void> _finish() async {
+  Future<void> _finish({bool completed = false}) async {
     _timer?.cancel();
     if (!mounted) return;
+
+    final int earned = completed ? 20 : 0;
+    if (completed) {
+      await UserPointsService.instance.addPoints(earned);
+    }
+    if (!mounted) return;
     final nav = Navigator.of(context);
-    final home = await showActivityReward(context, indoor: false);
+    final home = await showActivityReward(
+      context,
+      indoor: false,
+      userName: UserProfileService.instance.shortName,
+      points: UserPointsService.instance.points,
+      target: UserPointsService.instance.currentTarget,
+      earnedPoints: earned,
+    );
     if (home == true) {
       nav.pushAndRemoveUntil(
         MaterialPageRoute(
@@ -951,7 +966,7 @@ class _OutdoorActivitySessionPageState
                 0.8,
                 Center(
                   child: TextButton.icon(
-                    onPressed: _finish,
+                    onPressed: () => _finish(completed: false),
                     icon: const Icon(Icons.check_box_outlined,
                         size: 18, color: _kGreen),
                     label: Text(
@@ -1236,7 +1251,7 @@ class _OutdoorActivitySessionPageState
                   size: 18, color: Color(0xFF6B6A2A)),
               const SizedBox(width: 8),
               Text(
-                'Jekan Raya, Palangka Raya',
+                AppSettings.instance.locationName,
                 style: GoogleFonts.poppins(fontSize: 12, color: TC.dark),
               ),
             ],

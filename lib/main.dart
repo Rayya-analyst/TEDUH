@@ -1,7 +1,11 @@
 import 'screens/readiness_state.dart';
+import 'dart:async' show unawaited;
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'state/app_settings.dart';
+import 'state/monitoring_state.dart';
 import 'screens/region_page.dart';
+import 'screens/home_page.dart';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
@@ -11,6 +15,10 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 import 'screens/accessibility_intro_page.dart';
+import 'services/ai/teduh_ai_orchestrator.dart';
+import 'services/google_auth_service.dart';
+import 'services/offline_data_service.dart';
+import 'services/user_profile_service.dart';
 import 'services/voice_flow.dart';
 import 'services/voice_service.dart';
 import 'state/app_nav.dart';
@@ -32,6 +40,10 @@ Future<void> main() async {
   ));
   await AppSettings.instance.load();
   await ReadinessState.instance.load();
+  await UserProfileService.instance.loadProfile();
+  unawaited(MonitoringState.instance.initialize());
+  unawaited(OfflineDataService.instance.initialize());
+  await TeduhAiOrchestrator.instance.initialize();
   VoiceService.instance.attach();
   runApp(const TeduhApp());
 }
@@ -126,8 +138,26 @@ class _SplashScreenState extends State<SplashScreen>
     });
   }
 
-  void _goNext() {
+  Future<void> _goNext() async {
     if (!mounted) return;
+    final user = FirebaseAuth.instance.currentUser;
+    final prefs = await SharedPreferences.getInstance();
+    final rememberMe = prefs.getBool('remember_me') ?? true;
+
+    if (!mounted) return;
+
+    if (user != null && rememberMe) {
+      await UserProfileService.instance.loadProfile();
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 800),
+        pageBuilder: (context, animation, secondaryAnimation) => const HomePage(),
+        transitionsBuilder: (_, anim, _, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ));
+      return;
+    }
+
     Navigator.of(context).pushReplacement(PageRouteBuilder(
       transitionDuration: const Duration(milliseconds: 800),
       pageBuilder: (context, animation, secondaryAnimation) => const AccessibilityIntroPage(),
@@ -602,7 +632,31 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool passwordTersembunyi = true;
   bool _sedangLogin = false;
+  bool _sedangLoginGoogle = false;
+  bool _ingatSaya = true;
 
+  Future<void> _muatDataIngatSaya() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final remember = p.getBool('remember_me') ?? true;
+      final savedEmail = p.getString('saved_email');
+      final savedPass = p.getString('saved_password');
+
+      if (mounted) {
+        setState(() {
+          _ingatSaya = remember;
+          if (remember) {
+            if (savedEmail != null && savedEmail.isNotEmpty) {
+              emailController.text = savedEmail;
+            }
+            if (savedPass != null && savedPass.isNotEmpty) {
+              passwordController.text = savedPass;
+            }
+          }
+        });
+      }
+    } catch (_) {}
+  }
 
   Future<bool> _login() async {
     final email = emailController.text.trim();
@@ -617,6 +671,22 @@ class _LoginScreenState extends State<LoginScreen> {
         email: email,
         password: password,
       );
+      if (!mounted) return true;
+
+      try {
+        final p = await SharedPreferences.getInstance();
+        await p.setBool('remember_me', _ingatSaya);
+        if (_ingatSaya) {
+          await p.setString('saved_email', email);
+          await p.setString('saved_password', password);
+        } else {
+          await p.remove('saved_email');
+          await p.remove('saved_password');
+        }
+      } catch (_) {}
+
+      await UserProfileService.instance.loadProfile();
+
       if (!mounted) return true;
       tampilkanPesan('Login berhasil.');
       VoiceSession.welcomePending = AppSettings.instance.voiceFlows;
@@ -647,12 +717,36 @@ class _LoginScreenState extends State<LoginScreen> {
     return false;
   }
 
+  Future<void> _loginDenganGoogle() async {
+    setState(() => _sedangLoginGoogle = true);
+    try {
+      final res = await GoogleAuthService.instance.signInWithGoogle(context);
+      if (!mounted) return;
+
+      if (res.success) {
+        tampilkanPesan(res.message ?? 'Login Google berhasil.');
+        VoiceSession.welcomePending = AppSettings.instance.voiceFlows;
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const RegionPage()),
+          (route) => false,
+        );
+      } else if (!res.isCancelled) {
+        tampilkanPesan(res.message ?? 'Gagal masuk dengan Google.');
+      }
+    } catch (e) {
+      if (mounted) tampilkanPesan('Terjadi kesalahan Google Login: $e');
+    } finally {
+      if (mounted) setState(() => _sedangLoginGoogle = false);
+    }
+  }
+
   bool _voiceRunning = false;
   String _lastMsg = '';
 
   @override
   void initState() {
     super.initState();
+    _muatDataIngatSaya();
     final pe = VoiceSession.pendingEmail;
     if (pe != null) emailController.text = pe;
     if (AppSettings.instance.voiceFlows) {
@@ -929,13 +1023,45 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: Checkbox(
+                          value: _ingatSaya,
+                          activeColor: const Color(0xFF176D59),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          onChanged: (val) {
+                            setState(() => _ingatSaya = val ?? true);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () {
+                          setState(() => _ingatSaya = !_ingatSaya);
+                        },
+                        child: Text(
+                          'Ingat saya',
+                          style: GoogleFonts.poppins(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w500,
+                            color: const Color(0xFF334E43),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
                   SizedBox(
                     width: double.infinity,
                     height: 46,
                     child: ElevatedButton(
-                      onPressed: _sedangLogin ? null : _login,
+                      onPressed: (_sedangLogin || _sedangLoginGoogle) ? null : _login,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF176D59),
                         foregroundColor: Colors.white,
@@ -988,9 +1114,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     width: double.infinity,
                     height: 44,
                     child: OutlinedButton(
-                      onPressed: () {
-                        tampilkanPesan('Login Google akan dihubungkan.');
-                      },
+                      onPressed: (_sedangLogin || _sedangLoginGoogle) ? null : _loginDenganGoogle,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF31594C),
                         side: const BorderSide(color: Color(0xFFDCE9E1)),
@@ -998,24 +1122,33 @@ class _LoginScreenState extends State<LoginScreen> {
                           borderRadius: BorderRadius.circular(13),
                         ),
                       ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const SizedBox(
-                            width: 19,
-                            height: 19,
-                            child: CustomPaint(painter: _GoogleLogoPainter()),
-                          ),
-                          const SizedBox(width: 9),
-                          Text(
-                            'Lanjutkan dengan Google',
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
+                      child: _sedangLoginGoogle
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF176D59)),
+                              ),
+                            )
+                          : Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const SizedBox(
+                                  width: 19,
+                                  height: 19,
+                                  child: CustomPaint(painter: _GoogleLogoPainter()),
+                                ),
+                                const SizedBox(width: 9),
+                                Text(
+                                  'Lanjutkan dengan Google',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                        ],
-                      ),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -2344,10 +2477,10 @@ class _OnboardingScreen1State extends State<OnboardingScreen1>
                                 0.75,
                                 SizedBox(
                                   width: w,
-                                  height: w * 0.80,
+                                  height: (w * 0.72).clamp(180.0, 300.0),
                                   child: _buildIllustration(w, sway),
                                 ),
-                                dy: 28,
+                                dy: 24,
                               ),
 
                               SizedBox(height: h * 0.026),
@@ -2403,8 +2536,8 @@ class _OnboardingScreen1State extends State<OnboardingScreen1>
                                 dy: 22,
                               ),
 
-                              const Spacer(),
                               SizedBox(height: h * 0.02),
+                              const Spacer(),
 
                               _reveal(
                                 0.5,
@@ -2427,7 +2560,7 @@ class _OnboardingScreen1State extends State<OnboardingScreen1>
                                 dy: 16,
                               ),
 
-                              SizedBox(height: h * 0.012),
+                              SizedBox(height: h * 0.008),
 
                               _reveal(
                                 0.5,
@@ -2441,7 +2574,7 @@ class _OnboardingScreen1State extends State<OnboardingScreen1>
                                       onTap: _skip,
                                       child: Padding(
                                         padding: const EdgeInsets.symmetric(
-                                            horizontal: 8, vertical: 6),
+                                            horizontal: 8, vertical: 4),
                                         child: Text(
                                           'Lewati',
                                           style: GoogleFonts.inter(
@@ -2457,7 +2590,7 @@ class _OnboardingScreen1State extends State<OnboardingScreen1>
                                 dy: 10,
                               ),
 
-                              SizedBox(height: h * 0.03),
+                              SizedBox(height: h * 0.015),
                             ],
                           );
                         },
@@ -3043,10 +3176,10 @@ class _OnboardingScreen2State extends State<OnboardingScreen2>
                                 0.75,
                                 SizedBox(
                                   width: w,
-                                  height: w * 0.80,
+                                  height: (w * 0.72).clamp(180.0, 300.0),
                                   child: _buildIllustration(w, sway),
                                 ),
-                                dy: 28,
+                                dy: 24,
                               ),
 
                               SizedBox(height: h * 0.026),
@@ -3102,8 +3235,8 @@ class _OnboardingScreen2State extends State<OnboardingScreen2>
                                 dy: 22,
                               ),
 
-                              const Spacer(),
                               SizedBox(height: h * 0.02),
+                              const Spacer(),
 
                               _reveal(
                                 0.5,
@@ -3172,7 +3305,7 @@ class _OnboardingScreen2State extends State<OnboardingScreen2>
                                 dy: 16,
                               ),
 
-                              SizedBox(height: h * 0.012),
+                              SizedBox(height: h * 0.008),
 
                               _reveal(
                                 0.5,
@@ -3186,7 +3319,7 @@ class _OnboardingScreen2State extends State<OnboardingScreen2>
                                       onTap: _skip,
                                       child: Padding(
                                         padding: const EdgeInsets.symmetric(
-                                            horizontal: 8, vertical: 6),
+                                            horizontal: 8, vertical: 4),
                                         child: Text(
                                           'Lewati',
                                           style: GoogleFonts.inter(
@@ -3202,7 +3335,7 @@ class _OnboardingScreen2State extends State<OnboardingScreen2>
                                 dy: 10,
                               ),
 
-                              SizedBox(height: h * 0.03),
+                              SizedBox(height: h * 0.015),
                             ],
                           );
                         },
@@ -3595,10 +3728,10 @@ class _OnboardingScreen3State extends State<OnboardingScreen3>
                                 0.75,
                                 SizedBox(
                                   width: w,
-                                  height: w * 0.80,
+                                  height: (w * 0.72).clamp(180.0, 300.0),
                                   child: _buildIllustration(w, sway),
                                 ),
-                                dy: 28,
+                                dy: 24,
                               ),
 
                               SizedBox(height: h * 0.026),
@@ -3654,8 +3787,8 @@ class _OnboardingScreen3State extends State<OnboardingScreen3>
                                 dy: 22,
                               ),
 
-                              const Spacer(),
                               SizedBox(height: h * 0.02),
+                              const Spacer(),
 
                               _reveal(
                                 0.5,
@@ -3724,7 +3857,7 @@ class _OnboardingScreen3State extends State<OnboardingScreen3>
                                 dy: 16,
                               ),
 
-                              SizedBox(height: h * 0.012),
+                              SizedBox(height: h * 0.008),
 
                               _reveal(
                                 0.5,
@@ -3738,7 +3871,7 @@ class _OnboardingScreen3State extends State<OnboardingScreen3>
                                       onTap: _start,
                                       child: Padding(
                                         padding: const EdgeInsets.symmetric(
-                                            horizontal: 8, vertical: 6),
+                                            horizontal: 8, vertical: 4),
                                         child: Text(
                                           'Lewati',
                                           style: GoogleFonts.inter(
@@ -3754,7 +3887,7 @@ class _OnboardingScreen3State extends State<OnboardingScreen3>
                                 dy: 10,
                               ),
 
-                              SizedBox(height: h * 0.03),
+                              SizedBox(height: h * 0.015),
                             ],
                           );
                         },

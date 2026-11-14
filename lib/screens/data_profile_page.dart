@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'dart:math' as math;
+import 'package:image_picker/image_picker.dart';
 import '../widgets/coach_marks.dart';
 import '../widgets/voice_scope.dart';
+import '../services/user_profile_service.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -29,10 +32,10 @@ class _DataProfilePageState extends State<DataProfilePage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _anim;
 
-  final _nameC = TextEditingController(text: 'Aronisa Sinarzka Dewiputri');
-  final _usernameC = TextEditingController(text: 'Aronisa Sinarzka Dewiputri');
-  final _emailC = TextEditingController(text: 'aronisa.sinarzka@gmail.com');
-  final _phoneC = TextEditingController(text: '085847663653');
+  final _nameC = TextEditingController();
+  final _usernameC = TextEditingController();
+  final _emailC = TextEditingController();
+  final _phoneC = TextEditingController();
 
   final _nameF = FocusNode();
   final _usernameF = FocusNode();
@@ -45,6 +48,12 @@ class _DataProfilePageState extends State<DataProfilePage>
   @override
   void initState() {
     super.initState();
+    final profile = UserProfileService.instance.profile;
+    _nameC.text = profile.nama;
+    _usernameC.text = profile.nama;
+    _emailC.text = profile.email;
+    _phoneC.text = profile.phone;
+
     _anim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1300),
@@ -99,11 +108,20 @@ class _DataProfilePageState extends State<DataProfilePage>
 
     setState(() => _saving = true);
 
-    await Future.delayed(const Duration(milliseconds: 900));
-
-    if (!mounted) return;
-    setState(() => _saving = false);
-    _toast('Perubahan berhasil disimpan');
+    try {
+      await UserProfileService.instance.updateProfile(
+        nama: _nameC.text.trim(),
+        phone: _phoneC.text.trim(),
+        email: _emailC.text.trim(),
+      );
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _toast('Perubahan berhasil disimpan');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _toast('Gagal menyimpan perubahan: $e');
+    }
   }
 
   void _toast(String msg) {
@@ -116,8 +134,39 @@ class _DataProfilePageState extends State<DataProfilePage>
       ));
   }
 
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+        source: source,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+      if (picked != null) {
+        await UserProfileService.instance.updatePhoto(picked.path);
+        if (mounted) _toast('Foto profil berhasil diperbarui');
+      }
+    } catch (e) {
+      debugPrint('[DataProfilePage] Error pickImage: $e');
+      if (mounted) _toast('Gagal mengambil gambar: $e');
+    }
+  }
+
+  Future<void> _deletePhoto() async {
+    try {
+      await UserProfileService.instance.updatePhoto(null);
+      if (mounted) _toast('Foto profil berhasil dihapus');
+    } catch (e) {
+      if (mounted) _toast('Gagal menghapus foto');
+    }
+  }
+
   void _changePhoto() {
     FocusScope.of(context).unfocus();
+    final hasPhoto = UserProfileService.instance.photoUrl != null &&
+        UserProfileService.instance.photoUrl!.isNotEmpty;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
@@ -139,10 +188,34 @@ class _DataProfilePageState extends State<DataProfilePage>
                   borderRadius: BorderRadius.circular(4),
                 ),
               ),
-              _sheetTile(ctx, Icons.photo_camera_outlined, 'Ambil foto'),
-              _sheetTile(ctx, Icons.photo_library_outlined, 'Pilih dari galeri'),
-              _sheetTile(ctx, Icons.delete_outline_rounded, 'Hapus foto',
-                  color: _C.error),
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined, color: _C.dark),
+                title: Text('Ambil foto dari kamera',
+                    style: GoogleFonts.poppins(fontSize: 13.5, color: _C.dark)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined, color: _C.dark),
+                title: Text('Pilih dari galeri foto',
+                    style: GoogleFonts.poppins(fontSize: 13.5, color: _C.dark)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.gallery);
+                },
+              ),
+              if (hasPhoto)
+                ListTile(
+                  leading: const Icon(Icons.delete_outline_rounded, color: _C.error),
+                  title: Text('Hapus foto profil',
+                      style: GoogleFonts.poppins(fontSize: 13.5, color: _C.error)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _deletePhoto();
+                  },
+                ),
             ],
           ),
         ),
@@ -150,19 +223,46 @@ class _DataProfilePageState extends State<DataProfilePage>
     );
   }
 
-  Widget _sheetTile(BuildContext ctx, IconData icon, String label,
-      {Color color = _C.dark}) {
-    return ListTile(
-      leading: Icon(icon, color: color),
-      title: Text(
-        label,
-        style: GoogleFonts.poppins(fontSize: 13.5, color: color),
-      ),
-      onTap: () {
-        Navigator.pop(ctx);
+  Widget _buildAvatarImage(double size, String? photoUrl, String name) {
+    if (photoUrl != null && photoUrl.isNotEmpty) {
+      if (photoUrl.startsWith('http://') || photoUrl.startsWith('https://')) {
+        return ClipOval(
+          child: Image.network(
+            photoUrl,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => _buildFallbackAvatar(size, name),
+          ),
+        );
+      }
+      final file = File(photoUrl);
+      if (file.existsSync()) {
+        return ClipOval(
+          child: Image.file(
+            file,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => _buildFallbackAvatar(size, name),
+          ),
+        );
+      }
+    }
+    return _buildFallbackAvatar(size, name);
+  }
 
-        _toast('$label (segera hadir)');
-      },
+  Widget _buildFallbackAvatar(double size, String name) {
+    final initial = name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'U';
+    return Center(
+      child: Text(
+        initial,
+        style: GoogleFonts.poppins(
+          fontSize: size * 0.42,
+          fontWeight: FontWeight.w700,
+          color: _C.green,
+        ),
+      ),
     );
   }
 
@@ -243,7 +343,9 @@ class _DataProfilePageState extends State<DataProfilePage>
                             animation: _anim,
                             begin: 0.1,
                             end: 0.55,
-                            child: Center(
+                            child: AnimatedBuilder(
+                              animation: UserProfileService.instance,
+                              builder: (context, _) => Center(
                               child: Column(
                                 children: [
                                   GestureDetector(
@@ -271,11 +373,10 @@ class _DataProfilePageState extends State<DataProfilePage>
                                                 ),
                                               ],
                                             ),
-                                            child: Icon(
-                                              Icons.person_outline_rounded,
-                                              size: avatar * 0.5,
-                                              color: const Color(0xFF86A895),
-                                            ),
+                                            child: _buildAvatarImage(
+                                                avatar,
+                                                UserProfileService.instance.photoUrl,
+                                                UserProfileService.instance.displayName),
                                           ),
                                           Positioned(
                                             right: 0,
@@ -323,6 +424,7 @@ class _DataProfilePageState extends State<DataProfilePage>
                                   ),
                                 ],
                               ),
+                            ),
                             ),
                           ),
 

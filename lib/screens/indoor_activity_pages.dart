@@ -10,6 +10,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../services/user_points_service.dart';
+import '../services/user_profile_service.dart';
 import '../widgets/teduh_common.dart';
 import 'reward_popup.dart';
 
@@ -871,7 +873,7 @@ class _IndoorActivitySessionPageState extends State<IndoorActivitySessionPage>
       });
       _announceStep();
     } else {
-      _finish();
+      _finish(completed: true);
     }
   }
 
@@ -898,11 +900,24 @@ class _IndoorActivitySessionPageState extends State<IndoorActivitySessionPage>
     }
   }
 
-  Future<void> _finish() async {
+  Future<void> _finish({bool completed = false}) async {
     _timer?.cancel();
     if (!mounted) return;
+
+    final int earned = completed ? 20 : 0;
+    if (completed) {
+      await UserPointsService.instance.addPoints(earned);
+    }
+    if (!mounted) return;
     final nav = Navigator.of(context);
-    final home = await showActivityReward(context, indoor: true);
+    final home = await showActivityReward(
+      context,
+      indoor: true,
+      userName: UserProfileService.instance.shortName,
+      points: UserPointsService.instance.points,
+      target: UserPointsService.instance.currentTarget,
+      earnedPoints: earned,
+    );
     if (home == true) {
       nav.pushAndRemoveUntil(
         MaterialPageRoute(
@@ -961,7 +976,7 @@ class _IndoorActivitySessionPageState extends State<IndoorActivitySessionPage>
                 0.77,
                 Center(
                   child: TextButton.icon(
-                    onPressed: _finish,
+                    onPressed: () => _finish(completed: false),
                     icon: const Icon(Icons.check_rounded,
                         size: 18, color: _iGrey),
                     label: Text(

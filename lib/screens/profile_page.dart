@@ -1,10 +1,15 @@
+import 'dart:io';
 import 'dart:math' as math;
 import '../state/app_settings.dart';
+import '../services/user_profile_service.dart';
+import '../services/user_points_service.dart';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../widgets/coach_marks.dart';
+import '../widgets/teduh_drawer.dart';
+import '../widgets/teduh_header.dart';
 import '../widgets/voice_scope.dart';
 import 'accessibility_page.dart';
 import 'air_quality_history_page.dart';
@@ -65,8 +70,10 @@ class _ProfilePageState extends State<ProfilePage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _anim;
 
-  final String _name = 'Aronisa Sinarzka Dewiputri';
+  String get _name => UserProfileService.instance.displayName;
 
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
+  final _headerKey = GlobalKey();
   final _profileKey = GlobalKey();
   final List<GlobalKey> _sectionKeys = [GlobalKey(), GlobalKey(), GlobalKey()];
 
@@ -98,7 +105,58 @@ class _ProfilePageState extends State<ProfilePage>
     return b.toString();
   }
 
+  Widget _buildAvatarImage(double size, String? photoUrl, String name) {
+    if (photoUrl != null && photoUrl.isNotEmpty) {
+      if (photoUrl.startsWith('http://') || photoUrl.startsWith('https://')) {
+        return ClipOval(
+          child: Image.network(
+            photoUrl,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => _buildFallbackAvatar(size, name),
+          ),
+        );
+      }
+      final file = File(photoUrl);
+      if (file.existsSync()) {
+        return ClipOval(
+          child: Image.file(
+            file,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => _buildFallbackAvatar(size, name),
+          ),
+        );
+      }
+    }
+    return _buildFallbackAvatar(size, name);
+  }
+
+  Widget _buildFallbackAvatar(double size, String name) {
+    final initial = name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : 'U';
+    return Center(
+      child: Text(
+        initial,
+        style: GoogleFonts.poppins(
+          fontSize: size * 0.42,
+          fontWeight: FontWeight.w700,
+          color: _C.green,
+        ),
+      ),
+    );
+  }
+
   List<CoachStep> get _tourSteps => [
+        CoachStep(
+          target: _headerKey,
+          title: 'Menu dan notifikasi',
+          body: 'Ikon tiga garis membuka menu samping. Ikon lonceng membuka '
+              'riwayat notifikasi.',
+          radius: 22,
+          scrollAlignment: 0.0,
+        ),
         CoachStep(
           target: _profileKey,
           title: 'Ini profilmu',
@@ -159,10 +217,13 @@ class _ProfilePageState extends State<ProfilePage>
 
   @override
   Widget build(BuildContext context) {
-    final w = MediaQuery.of(context).size.width;
-    final avatar = w * 0.28;
+    return ListenableBuilder(
+      listenable: UserProfileService.instance,
+      builder: (context, _) {
+        final w = MediaQuery.of(context).size.width;
+        final avatar = w * 0.28;
 
-    return VoiceScope(
+        return VoiceScope(
       screen: 'profile',
       tour: _tourSteps,
       guide: PageGuide(
@@ -171,111 +232,141 @@ class _ProfilePageState extends State<ProfilePage>
             'ada di menu samping. Katakan buka bantuan untuk membukanya.',
       ),
       child: Scaffold(
+      key: _scaffoldKey,
       backgroundColor: _C.bg,
+      drawerScrimColor: const Color(0x6B1A2622),
+      drawer: const TeduhDrawer(current: HomeMenuItem.profile),
       body: Stack(
         children: [
-
           Positioned.fill(
             child: IgnorePointer(
               child: CustomPaint(painter: _SoftLeavesPainter(_anim)),
             ),
           ),
-
-          SafeArea(
-            child: SingleChildScrollView(
+          NestedScrollView(
+            physics: const BouncingScrollPhysics(),
+            headerSliverBuilder: (context, _) => [
+              SliverAppBar(
+                backgroundColor: _C.bg,
+                elevation: 0,
+                pinned: true,
+                floating: true,
+                snap: true,
+                toolbarHeight: 64,
+                automaticallyImplyLeading: false,
+                shadowColor: Colors.black.withValues(alpha: 0.08),
+                surfaceTintColor: Colors.transparent,
+                flexibleSpace: Container(
+                  decoration: BoxDecoration(
+                    color: _C.bg,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.05),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  child: SafeArea(
+                    bottom: false,
+                    child: KeyedSubtree(
+                      key: _headerKey,
+                      child: TeduhHeader(
+                        accent: 'PROFIL',
+                        subtitle: 'Pengaturan akun dan preferensi',
+                        onMenu: () => _scaffoldKey.currentState?.openDrawer(),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            body: SingleChildScrollView(
               physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
               child: Column(
                 children: [
-                  _Reveal(
-                    animation: _anim,
-                    begin: 0.0,
-                    end: 0.4,
-                    child: Row(
-                      children: [
-                        IconButton(
-                          onPressed: () => Navigator.maybePop(context),
-                          icon: const Icon(Icons.arrow_back_rounded),
-                          color: _C.dark,
-                          iconSize: 26,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                        const SizedBox(width: 18),
-                        Text(
-                          'Profil',
-                          style: GoogleFonts.poppins(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                            color: _C.dark,
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          'TEDUH',
-                          style: GoogleFonts.poppins(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 1.2,
-                            color: _C.green,
-                          ),
-                        ),
-                      ],
+                  KeyedSubtree(
+                    key: _profileKey,
+                    child: AnimatedBuilder(
+                      animation: UserProfileService.instance,
+                      builder: (context, _) {
+                        final photoUrl = UserProfileService.instance.photoUrl;
+                        final name = UserProfileService.instance.displayName;
+                        final email = UserProfileService.instance.email;
+
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _Reveal(
+                              animation: _anim,
+                              begin: 0.1,
+                              end: 0.55,
+                              child: Container(
+                                width: avatar,
+                                height: avatar,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: const Color(0xFFF0F6F1),
+                                  border: Border.all(color: _C.green, width: 2.2),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: _C.green.withValues(alpha: 0.14),
+                                      blurRadius: 24,
+                                      spreadRadius: 2,
+                                    ),
+                                  ],
+                                ),
+                                child: _buildAvatarImage(avatar, photoUrl, name),
+                              ),
+                            ),
+
+                            const SizedBox(height: 14),
+
+                            _Reveal(
+                              animation: _anim,
+                              begin: 0.2,
+                              end: 0.6,
+                              child: Column(
+                                children: [
+                                  Text(
+                                    name,
+                                    textAlign: TextAlign.center,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 16.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: _C.dark,
+                                    ),
+                                  ),
+                                  if (email.isNotEmpty) ...[
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      email,
+                                      textAlign: TextAlign.center,
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w400,
+                                        color: _C.footer,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ),
 
-                  const SizedBox(height: 22),
+                  const SizedBox(height: 16),
 
-                  KeyedSubtree(
-                    key: _profileKey,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _Reveal(
-                          animation: _anim,
-                          begin: 0.1,
-                          end: 0.55,
-                          child: Container(
-                            width: avatar,
-                            height: avatar,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: const Color(0xFFF0F6F1),
-                              border: Border.all(color: _C.green, width: 2.2),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: _C.green.withValues(alpha: 0.14),
-                                  blurRadius: 24,
-                                  spreadRadius: 2,
-                                ),
-                              ],
-                            ),
-                            child: Icon(
-                              Icons.person_outline_rounded,
-                              size: avatar * 0.5,
-                              color: const Color(0xFF86A895),
-                            ),
-                          ),
-                        ),
-
-                        const SizedBox(height: 14),
-
-                        _Reveal(
-                          animation: _anim,
-                          begin: 0.2,
-                          end: 0.6,
-                          child: Text(
-                            _name,
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.poppins(
-                              fontSize: 16.5,
-                              fontWeight: FontWeight.w600,
-                              color: _C.dark,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                  _Reveal(
+                    animation: _anim,
+                    begin: 0.25,
+                    end: 0.65,
+                    child: _buildPointsCard(context),
                   ),
 
                   const SizedBox(height: 20),
@@ -325,6 +416,191 @@ class _ProfilePageState extends State<ProfilePage>
           ),
         ],
       ),
+      ),
+    );
+      },
+    );
+  }
+
+  Widget _buildPointsCard(BuildContext context) {
+    return AnimatedBuilder(
+      animation: UserPointsService.instance,
+      builder: (context, _) {
+        final pts = UserPointsService.instance.points;
+        final target = UserPointsService.instance.currentTarget;
+        final count = UserPointsService.instance.activitiesCompleted;
+        final rank = UserPointsService.instance.rankTitle;
+        final progress = (target > 0 ? pts / target : 0.0).clamp(0.0, 1.0);
+        final percent = (progress * 100).round();
+
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFFFFFFFF), Color(0xFFF3F9F5)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFD6E8DC)),
+            boxShadow: [
+              BoxShadow(
+                color: _C.green.withValues(alpha: 0.06),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE0F3E7),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.emoji_events_rounded,
+                      color: _C.green,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              'Poin & Kebugaran',
+                              style: GoogleFonts.poppins(
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w700,
+                                color: _C.dark,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            GestureDetector(
+                              onTap: () => _showPointsExplanation(context),
+                              child: const Icon(
+                                Icons.info_outline_rounded,
+                                size: 16,
+                                color: Color(0xFF7C9084),
+                              ),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          rank,
+                          style: GoogleFonts.poppins(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w500,
+                            color: _C.green,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE0F3E7),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '$pts Poin',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: _C.green,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '$count sesi aktivitas selesai',
+                    style: GoogleFonts.poppins(
+                      fontSize: 11.5,
+                      color: const Color(0xFF5A7263),
+                    ),
+                  ),
+                  Text(
+                    '$percent% ke target ($target poin)',
+                    style: GoogleFonts.poppins(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF5A7263),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 7,
+                  backgroundColor: const Color(0xFFE2EFE6),
+                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFE2A32E)),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showPointsExplanation(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Row(
+          children: [
+            const Icon(Icons.emoji_events_rounded, color: _C.green, size: 24),
+            const SizedBox(width: 8),
+            Text(
+              'Tentang Poin TEDUH',
+              style: GoogleFonts.poppins(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: _C.dark,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Poin dihitung dari setiap panduan aktivitas kebugaran & perlindungan yang kamu selesaikan (indoor saat ISPU buruk, outdoor saat ISPU bersih).\n\nPoin dimulai dari 0 dan terus bertambah untuk memotivasi konsistensi menjaga kesehatan paru-paru serta membuka medali pencapaian gaya hidup sehat.',
+          style: GoogleFonts.poppins(
+            fontSize: 12.5,
+            height: 1.5,
+            color: const Color(0xFF4A5F53),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Mengerti',
+              style: GoogleFonts.poppins(
+                fontWeight: FontWeight.w600,
+                color: _C.green,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
