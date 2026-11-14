@@ -1,9 +1,16 @@
-import '../widgets/coach_marks.dart';
-import '../widgets/voice_scope.dart';
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:latlong2/latlong.dart' hide Path;
+
+import '../services/location_service.dart';
+import '../state/app_settings.dart';
+import '../state/monitoring_state.dart';
+import '../widgets/coach_marks.dart';
+import '../widgets/voice_scope.dart';
 
 class _MC {
   static const bg = Color(0xFFF5F8F4);
@@ -12,21 +19,42 @@ class _MC {
   static const greenTitle = Color(0xFF17664C);
   static const green = Color(0xFF0F7B4F);
   static const button = Color(0xFF1B6B58);
-  static const red = Color(0xFFE5384B);
   static const grey = Color(0xFF8A9A91);
   static const greyLight = Color(0xFF9AA59F);
   static const softLeaf = Color(0xFFE2EFDF);
   static const hint = Color(0xFF7C8B82);
-  static const sheetDark = Color(0xFF1F2D26);
 }
 
-const List<String> _districts = [
-  'Jekan Raya',
-  'Pahandut',
-  'Bukit Batu',
-  'Sabangau',
-  'Rakumpit',
-];
+List<String> _districtsFor(String loc) {
+  final l = loc.toLowerCase();
+  if (l.contains('malang')) {
+    return ['Lowokwaru', 'Klojen', 'Blimbing', 'Sukun', 'Kedungkandang'];
+  } else if (l.contains('palangka') || l.contains('jekan') || l.contains('tengah')) {
+    return ['Jekan Raya', 'Pahandut', 'Bukit Batu', 'Sabangau', 'Rakumpit'];
+  } else if (l.contains('jakarta')) {
+    return ['Kebayoran Baru', 'Setiabudi', 'Menteng', 'Tebet', 'Cilandak'];
+  } else if (l.contains('surabaya')) {
+    return ['Tegalsari', 'Gubeng', 'Wonokromo', 'Rungkut', 'Sukolilo'];
+  } else if (l.contains('bandung')) {
+    return ['Coblong', 'Sumur Bandung', 'Cicendo', 'Lengkong', 'Sukajadi'];
+  } else if (l.contains('banjar') || l.contains('selatan')) {
+    return ['Banjarmasin Tengah', 'Banjarmasin Selatan', 'Martapura', 'Banjarbaru'];
+  } else if (l.contains('kubu') || l.contains('pontianak') || l.contains('barat')) {
+    return ['Pontianak Kota', 'Pontianak Selatan', 'Sungai Raya', 'Kubu'];
+  } else if (l.contains('bulungan') || l.contains('tarakan') || l.contains('utara')) {
+    return ['Tanjung Selor', 'Tarakan Barat', 'Tarakan Tengah', 'Bunyu'];
+  } else if (l.contains('samarinda') || l.contains('timur') || l.contains('kaltim')) {
+    return ['Samarinda Kota', 'Sungai Kunjang', 'Samarinda Ulu', 'Palaran'];
+  }
+  final mainArea = loc.split(',').first.trim();
+  return [
+    if (mainArea.isNotEmpty) mainArea else 'Pusat Kota',
+    'Area Utara',
+    'Area Selatan',
+    'Area Timur',
+    'Area Barat',
+  ];
+}
 
 class _AqData {
   final int ispu;
@@ -49,42 +77,665 @@ Color _warnaSkala(double t) {
   return Color.lerp(_palet[i], _palet[i + 1], x - i)!;
 }
 
-const _AqData _designAq = _AqData(
-  211,
-  [13.4, 18.3, 14.7, 23.7, 17.6, 21.1, 26.2, 19.5, 24.3, 20.8, 26.2, 29.4],
-  [
-    Color(0xFFB9D8B7),
-    Color(0xFFB5D6B3),
-    Color(0xFFE8CF73),
-    Color(0xFFE8CC6C),
-    Color(0xFFE8A27D),
-    Color(0xFFE7A272),
-    Color(0xFFC98B87),
-    Color(0xFFC98B87),
-    Color(0xFFE9454B),
-    Color(0xFFE9454B),
-    Color(0xFFE94046),
-    Color(0xFFE83B42),
-  ],
-);
-
-_AqData _aqFor(String district) {
-  if (district == 'Jekan Raya') return _designAq;
-  final rnd = math.Random(district.hashCode);
-  final ispu = 101 + rnd.nextInt(200); 
-  final values = List<double>.generate(11, (_) => 40 + rnd.nextInt(260) * 1.0)
-    ..add(ispu.toDouble());
+_AqData _aqFromIspu(int ispu) {
+  final barH = 13 + 16.4 * (ispu / 400).clamp(0.0, 1.0);
+  final barColor = _warnaSkala(ispu / 400);
   return _AqData(
     ispu,
-    [for (final v in values) 13 + 16.4 * ((v - 40) / 260).clamp(0.0, 1.0)],
-    [for (final v in values) _warnaSkala((v - 40) / 260)],
+    List.filled(12, barH),
+    List.filled(12, barColor),
   );
 }
+
+class _IndoLocationEntry {
+  final String name;
+  final String province;
+  final String island;
+  final double lat;
+  final double lng;
+  final bool isCapital;
+
+  const _IndoLocationEntry({
+    required this.name,
+    required this.province,
+    required this.island,
+    required this.lat,
+    required this.lng,
+    this.isCapital = false,
+  });
+}
+
+const List<_IndoLocationEntry> _kIndoLocations = [
+  _IndoLocationEntry(name: 'Kota Palangka Raya', province: 'Kalimantan Tengah', island: 'Kalimantan', lat: -2.2161, lng: 113.9135, isCapital: true),
+  _IndoLocationEntry(name: 'Sampit (Kotawaringin Timur)', province: 'Kalimantan Tengah', island: 'Kalimantan', lat: -2.5323, lng: 112.9547),
+  _IndoLocationEntry(name: 'Pangkalan Bun (Kotawaringin Barat)', province: 'Kalimantan Tengah', island: 'Kalimantan', lat: -2.6833, lng: 111.6167),
+  _IndoLocationEntry(name: 'Kuala Kapuas', province: 'Kalimantan Tengah', island: 'Kalimantan', lat: -3.0091, lng: 114.3876),
+  _IndoLocationEntry(name: 'Kota Samarinda', province: 'Kalimantan Timur', island: 'Kalimantan', lat: -0.5022, lng: 117.1536, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Balikpapan', province: 'Kalimantan Timur', island: 'Kalimantan', lat: -1.2654, lng: 116.8312),
+  _IndoLocationEntry(name: 'IKN Nusantara (Sepaku)', province: 'Kalimantan Timur', island: 'Kalimantan', lat: -0.9634, lng: 116.7093),
+  _IndoLocationEntry(name: 'Kota Bontang', province: 'Kalimantan Timur', island: 'Kalimantan', lat: 0.1333, lng: 117.5000),
+  _IndoLocationEntry(name: 'Tenggarong (Kutai Kartanegara)', province: 'Kalimantan Timur', island: 'Kalimantan', lat: -0.4144, lng: 116.9911),
+  _IndoLocationEntry(name: 'Kota Pontianak', province: 'Kalimantan Barat', island: 'Kalimantan', lat: -0.0263, lng: 109.3425, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Singkawang', province: 'Kalimantan Barat', island: 'Kalimantan', lat: 0.9071, lng: 108.9859),
+  _IndoLocationEntry(name: 'Sungai Raya (Kubu Raya)', province: 'Kalimantan Barat', island: 'Kalimantan', lat: -0.0931, lng: 109.3789),
+  _IndoLocationEntry(name: 'Ketapang', province: 'Kalimantan Barat', island: 'Kalimantan', lat: -1.8344, lng: 109.9706),
+  _IndoLocationEntry(name: 'Kota Banjarmasin', province: 'Kalimantan Selatan', island: 'Kalimantan', lat: -3.3194, lng: 114.5908, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Banjarbaru', province: 'Kalimantan Selatan', island: 'Kalimantan', lat: -3.4402, lng: 114.8306),
+  _IndoLocationEntry(name: 'Martapura (Kabupaten Banjar)', province: 'Kalimantan Selatan', island: 'Kalimantan', lat: -3.4117, lng: 114.8572),
+  _IndoLocationEntry(name: 'Tanjung Selor (Bulungan)', province: 'Kalimantan Utara', island: 'Kalimantan', lat: 2.8379, lng: 117.3653, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Tarakan', province: 'Kalimantan Utara', island: 'Kalimantan', lat: 3.3274, lng: 117.5925),
+  _IndoLocationEntry(name: 'Nunukan', province: 'Kalimantan Utara', island: 'Kalimantan', lat: 4.1350, lng: 117.6483),
+
+  _IndoLocationEntry(name: 'Kota Jakarta Pusat', province: 'DKI Jakarta', island: 'Jawa', lat: -6.1751, lng: 106.8650, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Jakarta Selatan', province: 'DKI Jakarta', island: 'Jawa', lat: -6.2615, lng: 106.8106),
+  _IndoLocationEntry(name: 'Kota Jakarta Barat', province: 'DKI Jakarta', island: 'Jawa', lat: -6.1683, lng: 106.7588),
+  _IndoLocationEntry(name: 'Kota Jakarta Timur', province: 'DKI Jakarta', island: 'Jawa', lat: -6.2250, lng: 106.9004),
+  _IndoLocationEntry(name: 'Kota Jakarta Utara', province: 'DKI Jakarta', island: 'Jawa', lat: -6.1214, lng: 106.7741),
+  _IndoLocationEntry(name: 'Kota Bandung', province: 'Jawa Barat', island: 'Jawa', lat: -6.9175, lng: 107.6191, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Bogor', province: 'Jawa Barat', island: 'Jawa', lat: -6.5971, lng: 106.8060),
+  _IndoLocationEntry(name: 'Kota Bekasi', province: 'Jawa Barat', island: 'Jawa', lat: -6.2383, lng: 106.9756),
+  _IndoLocationEntry(name: 'Kota Depok', province: 'Jawa Barat', island: 'Jawa', lat: -6.4025, lng: 106.7942),
+  _IndoLocationEntry(name: 'Kota Tangerang', province: 'Banten', island: 'Jawa', lat: -6.1783, lng: 106.6319),
+  _IndoLocationEntry(name: 'Kota Tangerang Selatan', province: 'Banten', island: 'Jawa', lat: -6.2889, lng: 106.7179),
+  _IndoLocationEntry(name: 'Kota Serang', province: 'Banten', island: 'Jawa', lat: -6.1104, lng: 106.1640, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Cirebon', province: 'Jawa Barat', island: 'Jawa', lat: -6.7320, lng: 108.5523),
+  _IndoLocationEntry(name: 'Kota Tasikmalaya', province: 'Jawa Barat', island: 'Jawa', lat: -7.3274, lng: 108.2207),
+  _IndoLocationEntry(name: 'Kota Semarang', province: 'Jawa Tengah', island: 'Jawa', lat: -6.9667, lng: 110.4167, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Surakarta (Solo)', province: 'Jawa Tengah', island: 'Jawa', lat: -7.5755, lng: 110.8243),
+  _IndoLocationEntry(name: 'Kota Yogyakarta', province: 'D.I. Yogyakarta', island: 'Jawa', lat: -7.7956, lng: 110.3695, isCapital: true),
+  _IndoLocationEntry(name: 'Purwokerto (Banyumas)', province: 'Jawa Tengah', island: 'Jawa', lat: -7.4244, lng: 109.2303),
+  _IndoLocationEntry(name: 'Kota Tegal', province: 'Jawa Tengah', island: 'Jawa', lat: -6.8694, lng: 109.1402),
+  _IndoLocationEntry(name: 'Kota Magelang', province: 'Jawa Tengah', island: 'Jawa', lat: -7.4706, lng: 110.2178),
+  _IndoLocationEntry(name: 'Kota Surabaya', province: 'Jawa Timur', island: 'Jawa', lat: -7.2575, lng: 112.7521, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Malang', province: 'Jawa Timur', island: 'Jawa', lat: -7.9839, lng: 112.6214),
+  _IndoLocationEntry(name: 'Kota Batu', province: 'Jawa Timur', island: 'Jawa', lat: -7.8712, lng: 112.5270),
+  _IndoLocationEntry(name: 'Kota Kediri', province: 'Jawa Timur', island: 'Jawa', lat: -7.8480, lng: 112.0178),
+  _IndoLocationEntry(name: 'Kota Madiun', province: 'Jawa Timur', island: 'Jawa', lat: -7.6298, lng: 111.5239),
+  _IndoLocationEntry(name: 'Jember', province: 'Jawa Timur', island: 'Jawa', lat: -8.1724, lng: 113.7007),
+  _IndoLocationEntry(name: 'Banyuwangi', province: 'Jawa Timur', island: 'Jawa', lat: -8.2192, lng: 114.3691),
+
+  _IndoLocationEntry(name: 'Kota Medan', province: 'Sumatera Utara', island: 'Sumatera', lat: 3.5952, lng: 98.6722, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Pekanbaru', province: 'Riau', island: 'Sumatera', lat: 0.5071, lng: 101.4478, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Dumai', province: 'Riau', island: 'Sumatera', lat: 1.6667, lng: 101.4500),
+  _IndoLocationEntry(name: 'Kota Palembang', province: 'Sumatera Selatan', island: 'Sumatera', lat: -2.9761, lng: 104.7754, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Padang', province: 'Sumatera Barat', island: 'Sumatera', lat: -0.9471, lng: 100.4172, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Bukittinggi', province: 'Sumatera Barat', island: 'Sumatera', lat: -0.3056, lng: 100.3694),
+  _IndoLocationEntry(name: 'Kota Bandar Lampung', province: 'Lampung', island: 'Sumatera', lat: -5.4500, lng: 105.2667, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Batam', province: 'Kepulauan Riau', island: 'Sumatera', lat: 1.1301, lng: 104.0529),
+  _IndoLocationEntry(name: 'Kota Tanjungpinang', province: 'Kepulauan Riau', island: 'Sumatera', lat: 0.9167, lng: 104.4500, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Jambi', province: 'Jambi', island: 'Sumatera', lat: -1.6101, lng: 103.6131, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Bengkulu', province: 'Bengkulu', island: 'Sumatera', lat: -3.8004, lng: 102.2655, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Banda Aceh', province: 'Aceh', island: 'Sumatera', lat: 5.5483, lng: 95.3238, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Pangkalpinang', province: 'Kep. Bangka Belitung', island: 'Sumatera', lat: -2.1333, lng: 106.1167, isCapital: true),
+
+  _IndoLocationEntry(name: 'Kota Makassar', province: 'Sulawesi Selatan', island: 'Sulawesi', lat: -5.1477, lng: 119.4327, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Manado', province: 'Sulawesi Utara', island: 'Sulawesi', lat: 1.4748, lng: 124.8421, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Palu', province: 'Sulawesi Tengah', island: 'Sulawesi', lat: -0.9003, lng: 119.8779, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Kendari', province: 'Sulawesi Tenggara', island: 'Sulawesi', lat: -3.9985, lng: 122.5126, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Gorontalo', province: 'Gorontalo', island: 'Sulawesi', lat: 0.5435, lng: 123.0568, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Mamuju', province: 'Sulawesi Barat', island: 'Sulawesi', lat: -2.6775, lng: 118.8875, isCapital: true),
+
+  _IndoLocationEntry(name: 'Kota Denpasar', province: 'Bali', island: 'Bali & Nusa Tenggara', lat: -8.6705, lng: 115.2126, isCapital: true),
+  _IndoLocationEntry(name: 'Badung (Kuta)', province: 'Bali', island: 'Bali & Nusa Tenggara', lat: -8.7233, lng: 115.1725),
+  _IndoLocationEntry(name: 'Kota Mataram', province: 'Nusa Tenggara Barat', island: 'Bali & Nusa Tenggara', lat: -8.5833, lng: 116.1167, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Kupang', province: 'Nusa Tenggara Timur', island: 'Bali & Nusa Tenggara', lat: -10.1772, lng: 123.6070, isCapital: true),
+  _IndoLocationEntry(name: 'Labuan Bajo', province: 'Nusa Tenggara Timur', island: 'Bali & Nusa Tenggara', lat: -8.4964, lng: 119.8877),
+
+  _IndoLocationEntry(name: 'Kota Ambon', province: 'Maluku', island: 'Maluku & Papua', lat: -3.6547, lng: 128.1906, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Ternate', province: 'Maluku Utara', island: 'Maluku & Papua', lat: 0.7906, lng: 127.3842, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Jayapura', province: 'Papua', island: 'Maluku & Papua', lat: -2.5916, lng: 140.6690, isCapital: true),
+  _IndoLocationEntry(name: 'Kota Sorong', province: 'Papua Barat Daya', island: 'Maluku & Papua', lat: -0.8762, lng: 131.2558, isCapital: true),
+  _IndoLocationEntry(name: 'Manokwari', province: 'Papua Barat', island: 'Maluku & Papua', lat: -0.8615, lng: 134.0620, isCapital: true),
+  _IndoLocationEntry(name: 'Merauke', province: 'Papua Selatan', island: 'Maluku & Papua', lat: -8.4991, lng: 140.4011, isCapital: true),
+  _IndoLocationEntry(name: 'Timika (Mimika)', province: 'Papua Tengah', island: 'Maluku & Papua', lat: -4.5468, lng: 136.8837, isCapital: true),
+  _IndoLocationEntry(name: 'Wamena (Jayawijaya)', province: 'Papua Pegunungan', island: 'Maluku & Papua', lat: -4.0981, lng: 138.9442, isCapital: true),
+];
+
+class _UnifiedSearchResult {
+  final String name;
+  final String subtitle;
+  final double lat;
+  final double lng;
+  final bool isCapital;
+
+  const _UnifiedSearchResult({
+    required this.name,
+    required this.subtitle,
+    required this.lat,
+    required this.lng,
+    this.isCapital = false,
+  });
+}
+
+class _LocationSearchModal extends StatefulWidget {
+  final void Function(String name, double lat, double lng) onSelected;
+  const _LocationSearchModal({required this.onSelected});
+
+  @override
+  State<_LocationSearchModal> createState() => _LocationSearchModalState();
+}
+
+class _LocationSearchModalState extends State<_LocationSearchModal> {
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  Timer? _debounceTimer;
+
+  List<_IndoLocationEntry> _filteredLocal = [];
+  List<GeoSearchResult> _onlineResults = [];
+  bool _isLoading = false;
+  bool _isGpsLoading = false;
+  String? _gpsError;
+  String _activeQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _filteredLocal = [];
+  }
+
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String query) {
+    final q = query.trim().toLowerCase();
+    _activeQuery = q;
+
+    if (q.isEmpty) {
+      _debounceTimer?.cancel();
+      setState(() {
+        _filteredLocal = [];
+        _onlineResults = [];
+        _isLoading = false;
+      });
+      return;
+    }
+
+    final matched = _kIndoLocations.where((loc) {
+      return loc.name.toLowerCase().contains(q) ||
+          loc.province.toLowerCase().contains(q) ||
+          loc.island.toLowerCase().contains(q);
+    }).toList();
+
+    setState(() {
+      _filteredLocal = matched;
+    });
+
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 350), () async {
+      _fetchOnline(query);
+    });
+  }
+
+  void _executeSearch(String query) {
+    _searchFocusNode.unfocus();
+    _debounceTimer?.cancel();
+    final q = query.trim().toLowerCase();
+    _activeQuery = q;
+
+    if (q.isEmpty) return;
+
+    final matched = _kIndoLocations.where((loc) {
+      return loc.name.toLowerCase().contains(q) ||
+          loc.province.toLowerCase().contains(q) ||
+          loc.island.toLowerCase().contains(q);
+    }).toList();
+
+    setState(() {
+      _filteredLocal = matched;
+      _isLoading = true;
+    });
+
+    _fetchOnline(query);
+  }
+
+  Future<void> _fetchOnline(String query) async {
+    final q = query.trim();
+    if (q.length < 2) {
+      if (mounted) setState(() => _isLoading = false);
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      final res = await LocationService.instance.searchLocations(q);
+      if (mounted) {
+        setState(() {
+          _onlineResults = res;
+          _isLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _useGps() async {
+    setState(() {
+      _isGpsLoading = true;
+      _gpsError = null;
+    });
+
+    final res = await LocationService.instance.getCurrentLocation();
+    if (!mounted) return;
+
+    if (res.lat != null && res.lng != null) {
+      Navigator.pop(context);
+      widget.onSelected(res.locationName, res.lat!, res.lng!);
+    } else {
+      setState(() {
+        _isGpsLoading = false;
+        _gpsError = res.errorMessage ?? 'Gagal mengambil koordinat GPS. Pastikan GPS aktif.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewInsets = MediaQuery.of(context).viewInsets;
+
+    return Material(
+      color: Colors.white,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      child: Padding(
+        padding: EdgeInsets.only(bottom: viewInsets.bottom),
+        child: SizedBox(
+          height: MediaQuery.of(context).size.height * 0.84,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 12),
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFDDE3E0),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE8F2EC),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.location_searching_rounded, color: Color(0xFF17664C), size: 19),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Cari Lokasi di Indonesia',
+                            style: GoogleFonts.poppins(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: const Color(0xFF1F3D2F),
+                            ),
+                          ),
+                          Text(
+                            'Mendukung seluruh 38 provinsi, kota, dan koordinat GPS',
+                            style: GoogleFonts.poppins(fontSize: 10.5, color: const Color(0xFF7C8B82)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 20, color: Color(0xFF7C8B82)),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF3F7F5),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xFFDFE9E4)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 12),
+                              child: Icon(Icons.search_rounded, color: Color(0xFF1B6B58), size: 22),
+                            ),
+                            Expanded(
+                              child: TextField(
+                                controller: _searchController,
+                                focusNode: _searchFocusNode,
+                                autofocus: true,
+                                textInputAction: TextInputAction.search,
+                                onSubmitted: _executeSearch,
+                                onChanged: _onSearchChanged,
+                                style: GoogleFonts.poppins(fontSize: 13, color: const Color(0xFF1F3D2F)),
+                                decoration: InputDecoration(
+                                  hintText: 'Ketik kota, kabupaten, kecamatan...',
+                                  hintStyle: GoogleFonts.poppins(fontSize: 12.5, color: const Color(0xFF8A9A91)),
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                              ),
+                            ),
+                            if (_searchController.text.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.clear_rounded, size: 18, color: Color(0xFF7A8C84)),
+                                onPressed: () {
+                                  _searchController.clear();
+                                  _onSearchChanged('');
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Material(
+                      color: const Color(0xFF1B6B58),
+                      borderRadius: BorderRadius.circular(14),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () => _executeSearch(_searchController.text),
+                        child: Container(
+                          height: 48,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          alignment: Alignment.center,
+                          child: Text(
+                            'Cari',
+                            style: GoogleFonts.poppins(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Material(
+                  color: const Color(0xFFE9F4EE),
+                  borderRadius: BorderRadius.circular(12),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: _isGpsLoading ? null : _useGps,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      child: Row(
+                        children: [
+                          _isGpsLoading
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B6B58)),
+                                )
+                              : const Icon(Icons.my_location_rounded, size: 19, color: Color(0xFF1B6B58)),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _isGpsLoading ? 'Mendeteksi sinyal GPS aktual...' : 'Gunakan Lokasi GPS Saat Ini',
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: const Color(0xFF17664C),
+                              ),
+                            ),
+                          ),
+                          const Icon(Icons.arrow_forward_ios_rounded, size: 12, color: Color(0xFF1B6B58)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (_gpsError != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 6, 18, 0),
+                  child: Text(
+                    _gpsError!,
+                    style: GoogleFonts.poppins(fontSize: 11, color: const Color(0xFFE5384B)),
+                  ),
+                ),
+              if (_isLoading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 4),
+                  child: LinearProgressIndicator(
+                    minHeight: 2,
+                    backgroundColor: Colors.transparent,
+                    color: Color(0xFF1B6B58),
+                  ),
+                ),
+              const SizedBox(height: 6),
+              Expanded(
+                child: _buildResultsList(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResultsList() {
+    final hasSearch = _activeQuery.isNotEmpty;
+
+    if (hasSearch) {
+      final List<_UnifiedSearchResult> unified = [];
+      final Set<String> seen = {};
+
+      for (final loc in _filteredLocal) {
+        final key = loc.name.toLowerCase().trim();
+        if (!seen.contains(key)) {
+          seen.add(key);
+          unified.add(_UnifiedSearchResult(
+            name: loc.name,
+            subtitle: '${loc.province} · Model CAMS & Hotspot',
+            lat: loc.lat,
+            lng: loc.lng,
+            isCapital: loc.isCapital,
+          ));
+        }
+      }
+
+      for (final r in _onlineResults) {
+        final key = r.name.toLowerCase().trim();
+        final cleanKey = key.replaceAll('kota ', '').replaceAll('kabupaten ', '').replaceAll('provinsi ', '').trim();
+        final isDuplicate = seen.any((s) => s.contains(cleanKey) || cleanKey.contains(s));
+        if (!isDuplicate) {
+          seen.add(key);
+          unified.add(_UnifiedSearchResult(
+            name: r.name,
+            subtitle: r.displayName,
+            lat: r.lat,
+            lng: r.lng,
+            isCapital: false,
+          ));
+        }
+      }
+
+      if (unified.isEmpty && !_isLoading) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.location_off_rounded, size: 40, color: Color(0xFFB5C2BC)),
+                const SizedBox(height: 10),
+                Text(
+                  'Lokasi tidak ditemukan untuk "$_activeQuery"',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600, color: const Color(0xFF1F3D2F)),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Coba ketik nama kota utama atau pilih dari daftar kota populer di bawah.',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(fontSize: 11, color: const Color(0xFF7C8B82)),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
+      return ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Text(
+              'HASIL PENCARIAN (${unified.length})',
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.1,
+                color: const Color(0xFF7C8B82),
+              ),
+            ),
+          ),
+          for (final item in unified)
+            _buildLocationTile(
+              name: item.name,
+              subtitle: item.subtitle,
+              lat: item.lat,
+              lng: item.lng,
+              isCapital: item.isCapital,
+            ),
+        ],
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text(
+            'KOTA & WILAYAH POPULER',
+            style: GoogleFonts.poppins(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.1,
+              color: const Color(0xFF7C8B82),
+            ),
+          ),
+        ),
+        for (final loc in _kIndoLocations.take(15))
+          _buildLocationTile(
+            name: loc.name,
+            subtitle: '${loc.province} · ${loc.island}',
+            lat: loc.lat,
+            lng: loc.lng,
+            isCapital: loc.isCapital,
+          ),
+      ],
+    );
+  }
+
+  Widget _buildLocationTile({
+    required String name,
+    required String subtitle,
+    required double lat,
+    required double lng,
+    bool isCapital = false,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFAFCFA),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFEAEFEA)),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        leading: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: isCapital ? const Color(0xFFE2F0E8) : const Color(0xFFF0F5F2),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            isCapital ? Icons.location_city_rounded : Icons.location_on_rounded,
+            color: const Color(0xFF1B6B58),
+            size: 20,
+          ),
+        ),
+        title: Text(
+          name,
+          style: GoogleFonts.poppins(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: const Color(0xFF1F3D2F),
+          ),
+        ),
+        subtitle: Text(
+          subtitle,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: GoogleFonts.poppins(fontSize: 11, color: const Color(0xFF7C8B82)),
+        ),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFE9F4EE),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Pilih',
+                style: GoogleFonts.poppins(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF17664C),
+                ),
+              ),
+              const SizedBox(width: 3),
+              const Icon(Icons.arrow_forward_ios_rounded, size: 9, color: Color(0xFF17664C)),
+            ],
+          ),
+        ),
+        onTap: () {
+          Navigator.pop(context);
+          widget.onSelected(name, lat, lng);
+        },
+      ),
+    );
+  }
+}
+
 
 class MapPage extends StatefulWidget {
   final String wilayah;
 
-  const MapPage({super.key, this.wilayah = 'Kalimantan Tengah'});
+  const MapPage({super.key, this.wilayah = ''});
 
   @override
   State<MapPage> createState() => _MapPageState();
@@ -93,14 +744,23 @@ class MapPage extends StatefulWidget {
 class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
   late final AnimationController _anim; 
   late final AnimationController _chart;
+  Timer? _chartDelayTimer;
 
-  String _district = 'Jekan Raya';
+  late String _currentWilayah;
+  late List<String> _districts;
+  late String _district;
   bool _picked = false; 
-  late _AqData _aq = _aqFor(_district);
 
   @override
   void initState() {
     super.initState();
+    final mon = MonitoringState.instance;
+    _currentWilayah = widget.wilayah.isNotEmpty
+        ? widget.wilayah
+        : mon.locationName;
+    _districts = _districtsFor(_currentWilayah);
+    _district = _districts.first;
+
     _anim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1300),
@@ -111,74 +771,46 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 1100),
       animationBehavior: AnimationBehavior.preserve,
     );
-    Future.delayed(const Duration(milliseconds: 450), () {
+    _chartDelayTimer = Timer(const Duration(milliseconds: 450), () {
       if (mounted) _chart.forward();
     });
   }
 
   @override
   void dispose() {
+    _chartDelayTimer?.cancel();
     _anim.dispose();
     _chart.dispose();
     super.dispose();
   }
 
-  void _pickDistrict() {
+  void _openLocationSearch() {
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 12, 8, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 38,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD8E2DB),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-              for (final d in _districts)
-                ListTile(
-                  leading: Icon(Icons.location_on_outlined,
-                      color: d == _district ? _MC.green : _MC.hint),
-                  title: Text(
-                    '$d, Palangka Raya',
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      fontWeight:
-                          d == _district ? FontWeight.w600 : FontWeight.w400,
-                      color: _MC.sheetDark,
-                    ),
-                  ),
-                  trailing: d == _district
-                      ? const Icon(Icons.check_rounded, color: _MC.green)
-                      : null,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    if (d != _district) {
-                      setState(() {
-                        _district = d;
-                        _picked = true;
-                        _aq = _aqFor(d);
-                      });
-                      _chart.forward(from: 0);
-                    }
-                  },
-                ),
-            ],
-          ),
-        ),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _LocationSearchModal(
+        onSelected: (name, lat, lng) {
+          AppSettings.instance.setManualLocation(name, lat: lat, lng: lng);
+          if (mounted) {
+            setState(() {
+              _currentWilayah = name;
+              _districts = _districtsFor(name);
+              _district = _districts.first;
+              _picked = true;
+            });
+            _chart.forward(from: 0);
+          }
+          MonitoringState.instance.setCustomLocation(
+            name: name,
+            lat: lat,
+            lng: lng,
+          );
+        },
       ),
     );
   }
+
 
   @override
   Widget build(BuildContext context) => VoiceScope(
@@ -195,97 +827,138 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
       );
 
   Widget _buildPage(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _MC.bg,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: IgnorePointer(
-              child: CustomPaint(painter: _SoftLeavesPainter(_anim)),
-            ),
-          ),
-          SafeArea(
-            child: Column(
-              children: [
-                _Reveal(
-                  animation: _anim,
-                  begin: 0.0,
-                  end: 0.4,
-                  child: _buildAppBar(context),
+    return ListenableBuilder(
+      listenable: Listenable.merge([AppSettings.instance, MonitoringState.instance]),
+      builder: (context, _) {
+        final snapshot = AppSettings.instance.snapshot;
+        final mon = MonitoringState.instance;
+        final curIspu = mon.currentReading?.officialIspu ??
+            mon.currentReading?.pm25?.round() ??
+            snapshot.ispu;
+        final dynamicAq = _aqFromIspu(curIspu);
+
+        final lat = mon.selectedSite.latitude != 0.0
+            ? mon.selectedSite.latitude
+            : (mon.selectedRegion.defaultLatitude != 0.0
+                ? mon.selectedRegion.defaultLatitude
+                : -2.2161);
+        final lng = mon.selectedSite.longitude != 0.0
+            ? mon.selectedSite.longitude
+            : (mon.selectedRegion.defaultLongitude != 0.0
+                ? mon.selectedRegion.defaultLongitude
+                : 113.9135);
+        final displayLoc = _picked
+            ? '$_district, $_currentWilayah'
+            : (AppSettings.instance.locationName.isNotEmpty
+                ? AppSettings.instance.locationName
+                : (mon.locationName.isNotEmpty ? mon.locationName : _currentWilayah));
+
+        return Scaffold(
+          backgroundColor: _MC.bg,
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(painter: _SoftLeavesPainter(_anim)),
                 ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _Reveal(
-                          animation: _anim,
-                          begin: 0.1,
-                          end: 0.5,
-                          child: _buildLokasiHeader(),
-                        ),
-                        const SizedBox(height: 16),
-                        _Reveal(
-                          animation: _anim,
-                          begin: 0.2,
-                          end: 0.65,
-                          child: _MapCard(lokasi: '$_district, Kota Palangka Raya'),
-                        ),
-                        const SizedBox(height: 18),
-                        _Reveal(
-                          animation: _anim,
-                          begin: 0.35,
-                          end: 0.8,
-                          child: _AirQualityCard(data: _aq, anim: _chart),
-                        ),
-                        const SizedBox(height: 24),
-                        _Reveal(
-                          animation: _anim,
-                          begin: 0.5,
-                          end: 0.9,
-                          child: _buildWarning(),
-                        ),
-                      ],
+              ),
+              SafeArea(
+                child: Column(
+                  children: [
+                    _Reveal(
+                      animation: _anim,
+                      begin: 0.0,
+                      end: 0.4,
+                      child: _buildAppBar(context),
                     ),
-                  ),
-                ),
-                _Reveal(
-                  animation: _anim,
-                  begin: 0.6,
-                  end: 1.0,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 24, 16),
-                    child: SizedBox(
-                      width: double.infinity,
-                      height: 48,
-                      child: ElevatedButton(
-                        onPressed: _pickDistrict,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _MC.button,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _Reveal(
+                              animation: _anim,
+                              begin: 0.1,
+                              end: 0.5,
+                              child: _buildLokasiHeader(),
+                            ),
+                            const SizedBox(height: 16),
+                            _Reveal(
+                              animation: _anim,
+                              begin: 0.2,
+                              end: 0.65,
+                              child: _MapCard(
+                                lokasi: displayLoc,
+                                latitude: lat,
+                                longitude: lng,
+                                onSearchTap: _openLocationSearch,
+                              ),
+                            ),
+                            const SizedBox(height: 18),
+                            _Reveal(
+                              animation: _anim,
+                              begin: 0.35,
+                              end: 0.8,
+                              child: _AirQualityCard(
+                                data: dynamicAq,
+                                anim: _chart,
+                                status: snapshot.status,
+                                pm25: snapshot.pm25,
+                                description: snapshot.airDescription,
+                                observedAt: mon.currentReading?.observedAt,
+                                sourceId: mon.currentReading?.sourceId,
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                            _Reveal(
+                              animation: _anim,
+                              begin: 0.5,
+                              end: 0.9,
+                              child: _buildWarning(snapshot.status),
+                            ),
+                          ],
                         ),
-                        child: Text(
-                          'Ubah Wilayah',
-                          style: GoogleFonts.poppins(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    _Reveal(
+                      animation: _anim,
+                      begin: 0.6,
+                      end: 1.0,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 24, 16),
+                        child: SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: ElevatedButton(
+                            onPressed: _openLocationSearch,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _MC.button,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: Text(
+                              'Ubah Wilayah / Cari Lokasi',
+                              style: GoogleFonts.poppins(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -300,13 +973,28 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
             constraints: const BoxConstraints(minWidth: 36, minHeight: 48),
             icon: const Icon(Icons.arrow_back, color: _MC.dark, size: 22),
           ),
-          const SizedBox(width: 7),
-          Text(
-            'Peta',
-            style: GoogleFonts.poppins(
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              color: _MC.dark,
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Peta Kualitas Udara',
+                  style: GoogleFonts.poppins(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _MC.dark,
+                  ),
+                ),
+                Text(
+                  'Sebaran polutan CAMS & titik panas Karhutla se-Indonesia',
+                  style: GoogleFonts.poppins(
+                    fontSize: 10,
+                    color: _MC.hint,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -315,108 +1003,100 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
   }
 
   Widget _buildLokasiHeader() {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Expanded(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _pickDistrict,
-            child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'LOKASI SAAT INI',
-                style: GoogleFonts.poppins(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w400,
-                  color: _MC.grey,
-                ),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _openLocationSearch,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFDCE6E0)),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0A000000),
+              blurRadius: 6,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8F3ED),
+                borderRadius: BorderRadius.circular(10),
               ),
-              Row(
+              child: const Icon(Icons.location_on_rounded, color: _MC.button, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Flexible(
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 250),
-                      child: Text(
-                        _picked ? '$_district, Palangka Raya' : widget.wilayah,
-                        key: ValueKey(_picked ? _district : widget.wilayah),
-                        overflow: TextOverflow.ellipsis,
+                  Row(
+                    children: [
+                      Text(
+                        'LOKASI AKTIF',
                         style: GoogleFonts.poppins(
-                          fontSize: 15,
+                          fontSize: 9,
                           fontWeight: FontWeight.w700,
-                          color: _MC.greenTitle,
+                          letterSpacing: 1.0,
+                          color: _MC.grey,
                         ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        width: 5,
+                        height: 5,
+                        decoration: const BoxDecoration(
+                          color: _MC.green,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 250),
+                    child: Text(
+                      _picked ? '$_district, $_currentWilayah' : _currentWilayah,
+                      key: ValueKey(_picked ? '$_district, $_currentWilayah' : _currentWilayah),
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: _MC.darkText,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  const Icon(Icons.keyboard_arrow_down,
-                      color: _MC.greenTitle, size: 17),
                 ],
               ),
-            ],
-          ),
-          ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFCCD0),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 4,
-                height: 4,
-                decoration: const BoxDecoration(
-                  color: _MC.red,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 5),
-              Text(
-                'Terkini',
-                style: GoogleFonts.poppins(
-                  fontSize: 8,
-                  fontWeight: FontWeight.w500,
-                  color: _MC.red,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildWarning() {
-    return Padding(
-      padding: const EdgeInsets.only(left: 9),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 228),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Waspada kabut asap karhutla!',
-              style: GoogleFonts.poppins(
-                color: _MC.red,
-                fontWeight: FontWeight.w700,
-                fontSize: 10.5,
-              ),
             ),
-            const SizedBox(height: 2),
-            Text(
-              'Hindari aktivitas di luar ruangan dan gunakan masker jika '
-              'harus bepergian.',
-              style: GoogleFonts.poppins(
-                color: const Color(0xFF55635B),
-                fontSize: 9.5,
-                height: 1.2,
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE9F4EE),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.search_rounded, size: 14, color: _MC.button),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Cari Kota',
+                    style: GoogleFonts.poppins(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: _MC.button,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -424,33 +1104,123 @@ class _MapPageState extends State<MapPage> with TickerProviderStateMixin {
       ),
     );
   }
+
+  Widget _buildWarning(String status) {
+    final s = status.toLowerCase();
+    String title;
+    String desc;
+    Color color;
+
+    if (s.contains('baik')) {
+      title = 'Kualitas udara bersih & segar!';
+      desc = 'Sangat aman untuk beraktivitas dan berolahraga di luar ruangan.';
+      color = const Color(0xFF1B8756);
+    } else if (s.contains('sedang')) {
+      title = 'Kualitas udara dalam batas aman';
+      desc = 'Udara cukup baik untuk aktivitas sehari-hari di luar ruangan.';
+      color = const Color(0xFFB5850A);
+    } else if (s.contains('sensitif')) {
+      title = 'Perhatian bagi kelompok rentan!';
+      desc = 'Kelompok rentan (anak-anak, lansia, asma) dianjurkan mengurangi aktivitas luar.';
+      color = const Color(0xFFE07D10);
+    } else if (s.contains('tidak sehat')) {
+      title = 'Kurangi aktivitas luar ruangan!';
+      desc = 'Gunakan masker jika harus bepergian dan tutup ventilasi jika asap meningkat.';
+      color = const Color(0xFFE5484D);
+    } else {
+      title = 'Waspada kabut asap pekat!';
+      desc = 'Kondisi udara berbahaya. Tetap di dalam ruangan dan gunakan penyaring udara HEPA.';
+      color = const Color(0xFFC71F24);
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.shield_outlined, color: color, size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  title,
+                  style: GoogleFonts.poppins(
+                    color: color,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            desc,
+            style: GoogleFonts.poppins(
+              color: const Color(0xFF3E4E46),
+              fontSize: 10,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _MapCard extends StatefulWidget {
   final String lokasi;
-  const _MapCard({required this.lokasi});
+  final double latitude;
+  final double longitude;
+  final VoidCallback onSearchTap;
+
+  const _MapCard({
+    required this.lokasi,
+    required this.latitude,
+    required this.longitude,
+    required this.onSearchTap,
+  });
 
   @override
   State<_MapCard> createState() => _MapCardState();
 }
 
-class _MapCardState extends State<_MapCard>
-    with SingleTickerProviderStateMixin {
-  static const List<double> _zooms = [0.8, 1.0, 1.35, 1.8, 2.4];
-  static const List<String> _skala = ['300 m', '200 m', '150 m', '100 m', '50 m'];
-  static const int _defaultLevel = 1;
-
-  late final AnimationController _pulse; 
-  int _level = _defaultLevel;
+class _MapCardState extends State<_MapCard> with SingleTickerProviderStateMixin {
+  late final MapController _mapController;
+  late final AnimationController _pulse;
+  bool _isSatellite = false;
+  bool _showStations = true;
+  bool _showHotspots = true;
+  bool _showAerosol = false;
 
   @override
   void initState() {
     super.initState();
+    _mapController = MapController();
     _pulse = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1800),
       animationBehavior: AnimationBehavior.preserve,
     )..repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _MapCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.latitude != widget.latitude ||
+        oldWidget.longitude != widget.longitude) {
+      _mapController.move(
+        LatLng(widget.latitude, widget.longitude),
+        _mapController.camera.zoom,
+      );
+    }
   }
 
   @override
@@ -460,319 +1230,514 @@ class _MapCardState extends State<_MapCard>
   }
 
   void _zoomIn() {
-    if (_level < _zooms.length - 1) setState(() => _level++);
+    final cur = _mapController.camera.zoom;
+    if (cur < 18.0) {
+      _mapController.move(_mapController.camera.center, (cur + 1.0).clamp(4.0, 18.0));
+    }
   }
 
   void _zoomOut() {
-    if (_level > 0) setState(() => _level--);
+    final cur = _mapController.camera.zoom;
+    if (cur > 4.0) {
+      _mapController.move(_mapController.camera.center, (cur - 1.0).clamp(4.0, 18.0));
+    }
   }
 
   void _reset() {
-    if (_level != _defaultLevel) setState(() => _level = _defaultLevel);
+    _mapController.move(LatLng(widget.latitude, widget.longitude), 13.0);
   }
 
-  Widget _street(double w, double h, double cx, double cy, double z,
-      String text, double u, double v,
-      {bool small = true}) {
-    final size = small ? 6.5 : 8.5;
-    final left = cx + (u * w - cx) * z;
-    final top = cy + (v * h - cy) * z - size * 0.75;
-    if (left > w - 14 || left < -90 || top < 0 || top > h - 8) {
-      return const SizedBox.shrink();
-    }
-    return Positioned(
-      left: left,
-      top: top,
-      child: Text(
-        text,
-        softWrap: false,
-        style: GoogleFonts.poppins(
-          fontSize: size,
-          fontWeight: small ? FontWeight.w400 : FontWeight.w500,
-          color: small ? const Color(0xFF3FA36A) : const Color(0xFF6B8576),
-        ),
-      ),
+  void _showLayerBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return Container(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDDE3E0),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      const Icon(Icons.layers_rounded, color: Color(0xFF1B6B58), size: 22),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Lapisan Peta & Data Udara',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFF1C3A2E),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'TIPE DASAR PETA (BEBAS & PUBLIK)',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.2,
+                      color: const Color(0xFF7A8C84),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ChoiceChip(
+                          label: const Center(child: Text('Standar (OSM)')),
+                          selected: !_isSatellite,
+                          selectedColor: const Color(0xFF1B6B58),
+                          labelStyle: GoogleFonts.poppins(
+                            color: !_isSatellite ? Colors.white : const Color(0xFF1C3A2E),
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                          onSelected: (val) {
+                            if (val) {
+                              setSheetState(() => _isSatellite = false);
+                              setState(() => _isSatellite = false);
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ChoiceChip(
+                          label: const Center(child: Text('Citra Satelit')),
+                          selected: _isSatellite,
+                          selectedColor: const Color(0xFF1B6B58),
+                          labelStyle: GoogleFonts.poppins(
+                            color: _isSatellite ? Colors.white : const Color(0xFF1C3A2E),
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                          onSelected: (val) {
+                            if (val) {
+                              setSheetState(() => _isSatellite = true);
+                              setState(() => _isSatellite = true);
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'LAPISAN PEMANTAUAN (LAYER)',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.2,
+                      color: const Color(0xFF7A8C84),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      'Stasiun & Model Permukaan',
+                      style: GoogleFonts.poppins(fontSize: 12.5, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      'Konsentrasi PM2.5 / ISPU di permukaan tempat bernapas',
+                      style: GoogleFonts.poppins(fontSize: 10, color: const Color(0xFF7A8C84)),
+                    ),
+                    value: _showStations,
+                    activeThumbColor: const Color(0xFF1B6B58),
+                    onChanged: (v) {
+                      setSheetState(() => _showStations = v);
+                      setState(() => _showStations = v);
+                    },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      'Titik Panas Karhutla (NASA FIRMS Hotspot)',
+                      style: GoogleFonts.poppins(fontSize: 12.5, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      'Deteksi anomali suhu termal api satelit VIIRS/MODIS',
+                      style: GoogleFonts.poppins(fontSize: 10, color: const Color(0xFF7A8C84)),
+                    ),
+                    value: _showHotspots,
+                    activeThumbColor: const Color(0xFFE5384B),
+                    onChanged: (v) {
+                      setSheetState(() => _showHotspots = v);
+                      setState(() => _showHotspots = v);
+                    },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      'Sebaran Asap Atmosfer (CAMS Aerosol AOD)',
+                      style: GoogleFonts.poppins(fontSize: 12.5, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      'Ketebalan optik aerosol di kolom atmosfer (Open-Meteo)',
+                      style: GoogleFonts.poppins(fontSize: 10, color: const Color(0xFF7A8C84)),
+                    ),
+                    value: _showAerosol,
+                    activeThumbColor: const Color(0xFFD97706),
+                    onChanged: (v) {
+                      setSheetState(() => _showAerosol = v);
+                      setState(() => _showAerosol = v);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF3F7F5),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFDFE9E4)),
+                    ),
+                    child: Text(
+                      'Edukasi Ilmiah: Peta TEDUH menggunakan OpenStreetMap & NASA GIBS / ESRI publik '
+                      'tanpa dependensi Google Cloud Billing. Angka polutan bersumber dari model atmosfer CAMS Open-Meteo.',
+                      style: GoogleFonts.poppins(fontSize: 10, height: 1.45, color: const Color(0xFF4A5C54)),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1B6B58),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Text('Terapkan Lapisan', style: GoogleFonts.poppins(fontSize: 12.5, fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final targetLatLng = LatLng(widget.latitude, widget.longitude);
+
     return AspectRatio(
       aspectRatio: 1020 / 893,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: LayoutBuilder(
-          builder: (context, box) {
-            final w = box.maxWidth;
-            final h = box.maxHeight;
-            final cx = w * 0.504;
-            final cy = h * 0.570;
-            final r = w * 0.1625;
-
-            return TweenAnimationBuilder<double>(
-              tween: Tween<double>(end: _zooms[_level]),
-              duration: const Duration(milliseconds: 380),
-              curve: Curves.easeOutCubic,
-              builder: (context, z, _) {
-                return Stack(
-                  children: [
-                    Positioned.fill(
-                      child: ColoredBox(
-                        color: const Color(0xFFEEF2EA),
-                        child: Transform.scale(
-                          scale: z,
-                          alignment: Alignment(
-                            cx / w * 2 - 1,
-                            cy / h * 2 - 1,
-                          ),
-                          child: CustomPaint(painter: _MapPainter()),
-                        ),
-                      ),
-                    ),
-
-                    _street(w, h, cx, cy, z, 'Jl. Temanggung Tilung', 0.4706,
-                        0.319,
-                        small: false),
-                    _street(w, h, cx, cy, z, 'Jl. Yos Sudarso', 0.036, 0.530),
-                    _street(w, h, cx, cy, z, 'Jl. G. Obos', 0.600, 0.644),
-                    _street(w, h, cx, cy, z, 'Jl. Garuda', 0.434, 0.838),
-                    _street(w, h, cx, cy, z, 'Jl. Tjilik Riwut', 0.694, 0.913),
-
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: AnimatedBuilder(
-                          animation: _pulse,
-                          builder: (context, _) {
-                            final v = Curves.easeInOut.transform(_pulse.value);
-                            final rr = r * z * (0.86 + 0.28 * v);
-                            return Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                Positioned(
-                                  left: cx - rr,
-                                  top: cy - rr,
-                                  width: rr * 2,
-                                  height: rr * 2,
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: const Color(0xFFE8434F)
-                                          .withValues(alpha: 0.22 - 0.08 * v),
-                                      border: Border.all(
-                                        color: const Color(0xFFE8434F)
-                                            .withValues(
-                                                alpha: 0.36 - 0.12 * v),
-                                        width: 1,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: FlutterMap(
+                mapController: _mapController,
+                options: MapOptions(
+                  initialCenter: targetLatLng,
+                  initialZoom: 13.0,
+                  minZoom: 4.0,
+                  maxZoom: 18.0,
+                  interactionOptions: const InteractionOptions(
+                    flags: InteractiveFlag.all,
+                  ),
+                ),
+                children: [
+                  TileLayer(
+                    urlTemplate: _isSatellite
+                        ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+                        : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.teduh.app',
+                  ),
+                  MarkerLayer(
+                    markers: [
+                      Marker(
+                        point: targetLatLng,
+                        width: 140,
+                        height: 120,
+                        alignment: Alignment.center,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            AnimatedBuilder(
+                              animation: _pulse,
+                              builder: (context, _) {
+                                final v = Curves.easeInOut.transform(_pulse.value);
+                                return Container(
+                                  width: 28 + 12 * v,
+                                  height: 28 + 12 * v,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: const Color(0xFFE8434F).withValues(alpha: 0.25 - 0.1 * v),
+                                    border: Border.all(
+                                      color: const Color(0xFFE8434F).withValues(alpha: 0.5 - 0.2 * v),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  child: Center(
+                                    child: Container(
+                                      width: 14,
+                                      height: 14,
+                                      decoration: const BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: Color(0xFFE8434B),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black26,
+                                            blurRadius: 4,
+                                          ),
+                                        ],
+                                      ),
+                                      child: const Icon(
+                                        Icons.circle,
+                                        size: 6,
+                                        color: Colors.white,
                                       ),
                                     ),
                                   ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-
-                    Positioned(
-                      left: cx - 21,
-                      top: cy + 1.3 - 21,
-                      child: Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color:
-                              const Color(0xFF6F8F7B).withValues(alpha: 0.20),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      left: cx - 10,
-                      top: cy - 4,
-                      child: Container(
-                        width: 20,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color:
-                              const Color(0xFF4F6B5B).withValues(alpha: 0.45),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    ),
-
-                    Positioned(
-                      left: cx - 16,
-                      top: cy - 42.5,
-                      width: 32,
-                      height: 44,
-                      child: CustomPaint(painter: _PinPainter()),
-                    ),
-
-                    Positioned(
-                      left: w * 0.523,
-                      top: h * 0.675,
-                      child: FractionalTranslation(
-                        translation: const Offset(-0.5, 0),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color(0x1A000000),
-                                blurRadius: 6,
-                                offset: Offset(0, 2),
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Color(0x26000000),
+                                    blurRadius: 4,
+                                    offset: Offset(0, 1.5),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                          child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 250),
-                            child: Text(
-                              widget.lokasi,
-                              key: ValueKey(widget.lokasi),
-                              style: GoogleFonts.poppins(
-                                color: _MC.red,
-                                fontSize: 9,
-                                height: 1.3,
-                                fontWeight: FontWeight.w600,
+                              child: Text(
+                                widget.lokasi.split(',').first.trim(),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.poppins(
+                                  color: const Color(0xFF17664C),
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                         ),
                       ),
-                    ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
 
-                Positioned(
-                  top: 12,
-                  left: 12,
-                  right: 12,
+            Positioned(
+              top: 12,
+              left: 12,
+              right: 12,
+              child: Material(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                elevation: 3,
+                shadowColor: const Color(0x22000000),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: widget.onSearchTap,
                   child: Container(
-                    height: 38,
-                    padding: const EdgeInsets.only(left: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x14000000),
-                          blurRadius: 8,
-                          offset: Offset(0, 2),
-                        ),
-                      ],
-                    ),
+                    height: 46,
+                    padding: const EdgeInsets.fromLTRB(14, 0, 6, 0),
                     child: Row(
                       children: [
-                        const Icon(Icons.search,
-                            size: 17, color: Color(0xFF2E8B5E)),
-                        const SizedBox(width: 8),
+                        const Icon(Icons.search_rounded, size: 21, color: Color(0xFF1B6B58)),
+                        const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'Cari lokasi atau area',
+                            'Cari kota, kabupaten, atau kecamatan...',
                             overflow: TextOverflow.ellipsis,
                             style: GoogleFonts.poppins(
-                              fontSize: 10,
-                              color: const Color(0xFF8A958F),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: const Color(0xFF7A8C84),
                             ),
                           ),
                         ),
                         Container(
-                          width: 1,
-                          height: 18,
-                          color: const Color(0xFFE6EAE7),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1B6B58),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.location_searching_rounded, size: 14, color: Colors.white),
+                              const SizedBox(width: 5),
+                              Text(
+                                'Cari',
+                                style: GoogleFonts.poppins(
+                                  color: Colors.white,
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.layers_outlined,
-                            size: 19, color: Color(0xFF1B5E49)),
-                        const SizedBox(width: 10),
                       ],
                     ),
                   ),
                 ),
+              ),
+            ),
 
-                    Positioned(
-                      right: 12,
-                      bottom: 10.5,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _MapCtrl(
-                            height: 73.6,
-                            child: Column(
-                              children: [
-                                Expanded(
-                                  child: _MapIconTap(
-                                    icon: Icons.add,
-                                    color: _level < _zooms.length - 1
-                                        ? _MC.dark
-                                        : const Color(0xFFC3CCC6),
-                                    onTap: _level < _zooms.length - 1
-                                        ? _zoomIn
-                                        : null,
-                                  ),
-                                ),
-                                Container(
-                                  width: 17.6,
-                                  height: 1,
-                                  color: const Color(0xFFE6EBE7),
-                                ),
-                                Expanded(
-                                  child: _MapIconTap(
-                                    icon: Icons.remove,
-                                    color: _level > 0
-                                        ? _MC.dark
-                                        : const Color(0xFFC3CCC6),
-                                    onTap: _level > 0 ? _zoomOut : null,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 6.4),
-                          _MapCtrl(
-                            height: 34,
-                            child: _MapIconTap(
-                              icon: Icons.my_location,
-                              color: const Color(0xFF1B7A55),
-                              onTap: _reset,
-                            ),
-                          ),
-                        ],
+            Positioned(
+              top: 68,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4.5),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.94),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: const [
+                    BoxShadow(color: Color(0x15000000), blurRadius: 4, offset: Offset(0, 1.5)),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF1B6B58),
+                        shape: BoxShape.circle,
                       ),
                     ),
-
-                    Positioned(
-                      left: 13.4,
-                      bottom: 19,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          CustomPaint(
-                            size: const Size(26.6, 5),
-                            painter: _ScalePainter(),
-                          ),
-                          const SizedBox(width: 6),
-                          AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 200),
-                            child: Text(
-                              _skala[_level],
-                              key: ValueKey(_level),
-                              style: GoogleFonts.poppins(
-                                fontSize: 7.5,
-                                color: const Color(0xFF8E9A93),
-                              ),
-                            ),
-                          ),
-                        ],
+                    const SizedBox(width: 6),
+                    Text(
+                      _isSatellite ? 'Citra Satelit ESRI/GIBS' : 'OpenStreetMap (OSM)',
+                      style: GoogleFonts.poppins(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF17664C),
                       ),
                     ),
                   ],
-                );
-              },
-            );
-          },
+                ),
+              ),
+            ),
+
+            Positioned(
+              top: 66,
+              right: 12,
+              child: Material(
+                color: Colors.white,
+                shape: const CircleBorder(),
+                elevation: 3,
+                shadowColor: const Color(0x22000000),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: _showLayerBottomSheet,
+                  child: Container(
+                    width: 38,
+                    height: 38,
+                    alignment: Alignment.center,
+                    child: Icon(
+                      _isSatellite ? Icons.satellite_alt_rounded : Icons.layers_outlined,
+                      size: 20,
+                      color: const Color(0xFF1B6B58),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            Positioned(
+              right: 12,
+              bottom: 12,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _MapCtrl(
+                    height: 74,
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: _MapIconTap(
+                            icon: Icons.add,
+                            color: _MC.dark,
+                            onTap: _zoomIn,
+                          ),
+                        ),
+                        Container(
+                          width: 18,
+                          height: 1,
+                          color: const Color(0xFFE6EBE7),
+                        ),
+                        Expanded(
+                          child: _MapIconTap(
+                            icon: Icons.remove,
+                            color: _MC.dark,
+                            onTap: _zoomOut,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _MapCtrl(
+                    height: 36,
+                    child: _MapIconTap(
+                      icon: Icons.my_location,
+                      color: const Color(0xFF1B7A55),
+                      onTap: _reset,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            Positioned(
+              left: 12,
+              bottom: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.85),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _isSatellite ? '© NASA GIBS / ESRI' : '© OpenStreetMap',
+                  style: GoogleFonts.poppins(
+                    fontSize: 8.5,
+                    color: const Color(0xFF55635B),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -831,224 +1796,70 @@ class _MapIconTap extends StatelessWidget {
   }
 }
 
-class _ScalePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final p = Paint()
-      ..color = const Color(0xFF8E9A93)
-      ..strokeWidth = 1
-      ..style = PaintingStyle.stroke;
-    final y = size.height / 2;
-    canvas.drawLine(Offset(0, y), Offset(size.width, y), p);
-    canvas.drawLine(Offset(0, y - 2), Offset(0, y + 2), p);
-    canvas.drawLine(Offset(size.width, y - 2), Offset(size.width, y + 2), p);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _PinPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    const cx = 16.0;
-    const cy = 16.5;
-    const r = 13.5;
-    const tipY = 42.5;
-
-    final circle = Path()
-      ..addOval(Rect.fromCircle(center: const Offset(cx, cy), radius: r));
-    final tail = Path()
-      ..moveTo(cx - r * 0.88, cy + r * 0.48)
-      ..quadraticBezierTo(cx - r * 0.45, cy + r * 1.45, cx, tipY)
-      ..quadraticBezierTo(
-          cx + r * 0.45, cy + r * 1.45, cx + r * 0.88, cy + r * 0.48)
-      ..close();
-    final pin = Path.combine(PathOperation.union, circle, tail);
-
-    canvas.drawPath(
-      pin,
-      Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 4.4
-        ..strokeJoin = StrokeJoin.round
-        ..isAntiAlias = true,
-    );
-    canvas.drawPath(
-      pin,
-      Paint()
-        ..color = const Color(0xFFE8434B)
-        ..isAntiAlias = true,
-    );
-    canvas.drawCircle(
-      const Offset(cx, cy),
-      6.6,
-      Paint()
-        ..color = Colors.white
-        ..isAntiAlias = true,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _MapPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-
-    Offset p(double x, double y) =>
-        Offset((x - 20) / 1020 * w, (y - 35) / 893 * h);
-    double s(double px) => px / 1020 * w;
-    Rect rect(double l, double t, double r, double b) =>
-        Rect.fromPoints(p(l, t), p(r, b));
-    canvas.drawRect(
-      Offset.zero & size,
-      Paint()..color = const Color(0xFFEEF2EA),
-    );
-
-    final block = Paint()..color = const Color(0xFFDDE6D8);
-    const blocks = <List<double>>[
-      [20, 255, 205, 395],
-      [20, 455, 175, 625],
-      [20, 690, 150, 790],
-      [20, 845, 130, 940],
-      [245, 272, 448, 388],
-      [215, 442, 420, 598],
-      [205, 655, 398, 780],
-      [770, 275, 940, 430],
-      [760, 475, 925, 625],
-      [700, 690, 900, 805],
-      [985, 285, 1050, 450],
-      [985, 510, 1050, 625],
-      [320, 35, 500, 70],
-      [410, 880, 630, 940],
-      [150, 880, 380, 940],
-      [690, 840, 1050, 940],
-    ];
-    for (final b in blocks) {
-      canvas.drawRect(rect(b[0], b[1], b[2], b[3]), block);
-    }
-
-    final park = Paint()..color = const Color(0xFFD4E3CD);
-    canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        rect(512, 238, 720, 420),
-        topLeft: Radius.circular(s(30)),
-        topRight: Radius.circular(s(30)),
-      ),
-      park,
-    );
-    canvas.drawRect(rect(800, 35, 1050, 195), park);
-
-    Paint river(double width) => Paint()
-      ..color = const Color(0xFFD0E6E3)
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = s(width);
-
-    canvas.drawPath(
-      Path()
-        ..moveTo(p(500, 75).dx, p(500, 75).dy)
-        ..cubicTo(p(560, 40).dx, p(560, 40).dy, p(620, 30).dx, p(620, 30).dy,
-            p(690, 30).dx, p(690, 30).dy),
-      river(32),
-    );
-    canvas.drawPath(
-      Path()
-        ..moveTo(p(690, 190).dx, p(690, 190).dy)
-        ..cubicTo(p(830, 195).dx, p(830, 195).dy, p(990, 235).dx,
-            p(990, 235).dy, p(1050, 300).dx, p(1050, 300).dy),
-      river(40),
-    );
-    canvas.drawPath(
-      Path()
-        ..moveTo(p(1050, 350).dx, p(1050, 350).dy)
-        ..cubicTo(p(990, 390).dx, p(990, 390).dy, p(880, 395).dx,
-            p(880, 395).dy, p(760, 385).dx, p(760, 385).dy),
-      river(34),
-    );
-    canvas.drawOval(
-      Rect.fromCenter(center: p(490, 492), width: s(440), height: s(84)),
-      river(32),
-    );
-    canvas.drawPath(
-      Path()
-        ..moveTo(p(300, 750).dx, p(300, 750).dy)
-        ..cubicTo(p(420, 735).dx, p(420, 735).dy, p(560, 710).dx,
-            p(560, 710).dy, p(700, 672).dx, p(700, 672).dy),
-      river(30),
-    );
-    canvas.drawPath(
-      Path()
-        ..moveTo(p(20, 830).dx, p(20, 830).dy)
-        ..cubicTo(p(90, 845).dx, p(90, 845).dy, p(140, 880).dx,
-            p(140, 880).dy, p(170, 940).dx, p(170, 940).dy),
-      river(34),
-    );
-
-    Paint road(double width) => Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = s(width);
-
-    Path poly(List<List<double>> pts) {
-      final path = Path()..moveTo(p(pts[0][0], pts[0][1]).dx, p(pts[0][0], pts[0][1]).dy);
-      for (int i = 1; i < pts.length; i++) {
-        final o = p(pts[i][0], pts[i][1]);
-        path.lineTo(o.dx, o.dy);
-      }
-      return path;
-    }
-
-    final main = road(18);
-    canvas.drawPath(poly([[250, 262], [752, 268]]), main);
-    canvas.drawPath(poly([[752, 268], [712, 440], [692, 825]]), main);
-    canvas.drawPath(poly([[250, 262], [172, 812]]), main);
-    canvas.drawPath(poly([[172, 812], [692, 828]]), main);
-
-    final inner = road(15);
-    canvas.drawPath(poly([[238, 410], [715, 432]]), inner);
-    canvas.drawPath(poly([[197, 612], [700, 622]]), inner);
-    canvas.drawPath(
-        poly([[470, 262], [440, 412], [418, 614], [402, 826]]), inner);
-
-    final highway = Path()
-      ..moveTo(p(1048, 40).dx, p(1048, 40).dy)
-      ..cubicTo(p(960, 175).dx, p(960, 175).dy, p(800, 365).dx,
-          p(800, 365).dy, p(640, 545).dx, p(640, 545).dy)
-      ..cubicTo(p(520, 675).dx, p(520, 675).dy, p(330, 755).dx,
-          p(330, 755).dy, p(20, 930).dx, p(20, 930).dy);
-    canvas.drawPath(
-      highway,
-      Paint()
-        ..color = const Color(0xFFE3D5AB)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = s(44),
-    );
-    canvas.drawPath(
-      highway,
-      Paint()
-        ..color = const Color(0xFFF7EFCF)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = s(31),
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
 class _AirQualityCard extends StatelessWidget {
   final _AqData data;
   final Animation<double> anim;
+  final String status;
+  final String pm25;
+  final String description;
+  final DateTime? observedAt;
+  final String? sourceId;
 
-  const _AirQualityCard({required this.data, required this.anim});
+  const _AirQualityCard({
+    required this.data,
+    required this.anim,
+    required this.status,
+    required this.pm25,
+    required this.description,
+    this.observedAt,
+    this.sourceId,
+  });
+
+  Color get _statusColor {
+    final s = status.toLowerCase();
+    if (s.contains('baik')) return const Color(0xFF1B8756);
+    if (s.contains('sedang')) return const Color(0xFFB5850A);
+    if (s.contains('sensitif')) return const Color(0xFFE07D10);
+    if (s.contains('tidak sehat')) return const Color(0xFFE5484D);
+    return const Color(0xFFC71F24);
+  }
+
+  List<Color> get _gradientColors {
+    final s = status.toLowerCase();
+    if (s.contains('baik')) {
+      return const [Color(0xFF28A745), Color(0xFF74D88D)];
+    }
+    if (s.contains('sedang')) {
+      return const [Color(0xFFE0A800), Color(0xFFFFD460)];
+    }
+    if (s.contains('sensitif')) {
+      return const [Color(0xFFE07D10), Color(0xFFFFB366)];
+    }
+    if (s.contains('tidak sehat')) {
+      return const [Color(0xFFE5484D), Color(0xFFF1949A)];
+    }
+    return const [Color(0xFFC71F24), Color(0xFF8B1216)];
+  }
+
+  String get _sourceName {
+    if (sourceId == 'cams_openmeteo') {
+      return 'Sumber: Open-Meteo CAMS (Model)';
+    } else if (sourceId == 'firestore_stored') {
+      return 'Sumber: Arsip Firestore';
+    } else if (sourceId == 'google_air_quality') {
+      return 'Sumber: Google Air Quality';
+    }
+    return 'Sumber: Open-Meteo CAMS';
+  }
+
+  String get _updatedText {
+    if (observedAt != null) {
+      final h = observedAt!.hour.toString().padLeft(2, '0');
+      final m = observedAt!.minute.toString().padLeft(2, '0');
+      return 'Diperbarui $h.$m WIB';
+    }
+    return 'Diperbarui baru saja';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1058,7 +1869,7 @@ class _AirQualityCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFE5384B), width: 1.6),
+        border: Border.all(color: _statusColor, width: 1.6),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1072,14 +1883,14 @@ class _AirQualityCard extends StatelessWidget {
                       fontSize: 17.5,
                       fontWeight: FontWeight.w700,
                     ),
-                    children: const [
-                      TextSpan(
+                    children: [
+                      const TextSpan(
                         text: 'Kualitas Udara: ',
                         style: TextStyle(color: _MC.greenTitle),
                       ),
                       TextSpan(
-                        text: 'Tidak Sehat',
-                        style: TextStyle(color: _MC.red),
+                        text: status,
+                        style: TextStyle(color: _statusColor),
                       ),
                     ],
                   ),
@@ -1097,12 +1908,12 @@ class _AirQualityCard extends StatelessWidget {
               Container(
                 width: 80,
                 height: 80,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Color(0xFFE9444F), Color(0xFFF1949A)],
+                    colors: _gradientColors,
                   ),
                 ),
                 child: Column(
@@ -1145,7 +1956,11 @@ class _AirQualityCard extends StatelessWidget {
                       children: [
                         Expanded(
                           child: Text(
-                            'Udara berasap',
+                            description.isNotEmpty
+                                ? description
+                                : 'PM2.5: $pm25 µg/m³',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: GoogleFonts.poppins(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
@@ -1270,7 +2085,7 @@ class _AirQualityCard extends StatelessWidget {
               const Icon(Icons.sync, size: 13, color: Color(0xFF7F8B85)),
               const SizedBox(width: 5),
               Text(
-                'Diperbarui 2 menit lalu',
+                _updatedText,
                 style: GoogleFonts.poppins(
                   fontSize: 8.5,
                   color: const Color(0xFF8A958F),
@@ -1278,10 +2093,11 @@ class _AirQualityCard extends StatelessWidget {
               ),
               const Spacer(),
               Text(
-                'Sumber: KLHK',
+                _sourceName,
                 style: GoogleFonts.poppins(
                   fontSize: 8.5,
-                  color: const Color(0xFF8A958F),
+                  fontWeight: FontWeight.w500,
+                  color: const Color(0xFF1B6B58),
                 ),
               ),
             ],

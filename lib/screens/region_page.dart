@@ -1,10 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import '../state/app_settings.dart';
-import '../services/voice_flow.dart';
-import '../services/voice_service.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../models/air_quality_models.dart';
+import '../services/location_service.dart';
+import '../services/voice_flow.dart';
+import '../services/voice_service.dart';
+import '../state/app_settings.dart';
+import '../state/monitoring_state.dart';
 import 'home_page.dart';
 import 'location_permission_dialog.dart';
 
@@ -23,15 +29,93 @@ class _RgColors {
 class RegionOption {
   final String province;
   final String area;
-  const RegionOption(this.province, this.area);
+  final double? lat;
+  final double? lng;
+  final int? ispu;
+  final String? ispuCategory;
+
+  const RegionOption(
+    this.province,
+    this.area, {
+    this.lat,
+    this.lng,
+    this.ispu,
+    this.ispuCategory,
+  });
+
+  static RegionOption? matchFromSpeech(String speech, List<RegionOption> options) {
+    final text = speech
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^\p{L}\p{N}\s]', unicode: true), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (text.isEmpty) return null;
+
+    RegionOption? bestMatch;
+    int highestScore = 0;
+
+    for (final r in options) {
+      final prov = r.province.toLowerCase();
+      final area = r.area.toLowerCase();
+      final cleanArea = area
+          .replaceAll('kota ', '')
+          .replaceAll('kabupaten ', '')
+          .replaceAll(RegExp(r'\(.*?\)'), '')
+          .trim();
+
+      int score = 0;
+
+      if (text.contains(prov)) {
+        score += 150;
+      }
+
+      if (text.contains(cleanArea)) {
+        score += 120;
+      } else if (text.contains(area)) {
+        score += 100;
+      }
+
+      final provWords = prov.split(' ').where((w) => w.length > 2).toList();
+      final allWordsMatch = provWords.every((w) => text.contains(w));
+      if (allWordsMatch && provWords.length > 1) {
+        score += 130;
+      }
+
+      if (text.contains('kalimantan') && !prov.contains('kalimantan')) {
+        score -= 2000;
+      }
+      if (text.contains('jawa') && !prov.contains('jawa')) {
+        score -= 2000;
+      }
+      if (text.contains('sumatera') && !prov.contains('sumatera')) {
+        score -= 2000;
+      }
+      if (text.contains('sulawesi') && !prov.contains('sulawesi')) {
+        score -= 2000;
+      }
+
+      final direction = prov.split(' ').last;
+      if (direction.length > 3 && text.contains(direction)) {
+        score += 20;
+      }
+
+      if (prov.contains('kalimantan')) {
+        score += 5;
+      }
+
+      if (score > highestScore) {
+        highestScore = score;
+        bestMatch = r;
+      }
+    }
+
+    return highestScore >= 50 ? bestMatch : null;
+  }
 }
 
 class RegionPage extends StatefulWidget {
-
   final ValueChanged<RegionOption>? onSelected;
-
   final VoidCallback? onUseLocationTap;
-
   final ValueChanged<LocationPermissionChoice>? onLocationPermission;
 
   const RegionPage({
@@ -46,45 +130,82 @@ class RegionPage extends StatefulWidget {
 }
 
 class _RegionPageState extends State<RegionPage> {
-  static const List<RegionOption> _regions = [
-    RegionOption('Kalimantan Tengah', 'Kota Palangka Raya'),
-    RegionOption('Kalimantan Barat', 'Kabupaten Kubu Raya'),
-    RegionOption('Kalimantan Selatan', 'Kabupaten Banjar'),
-    RegionOption('Kalimantan Utara', 'Kabupaten Bulungan'),
+  static const List<RegionOption> _popularRegions = [
+    RegionOption('Kalimantan Tengah', 'Kota Palangka Raya', lat: -2.2161, lng: 113.9135),
+    RegionOption('Kalimantan Timur', 'Kota Samarinda', lat: -0.5022, lng: 117.1536),
+    RegionOption('Kalimantan Barat', 'Kota Pontianak', lat: -0.0263, lng: 109.3425),
+    RegionOption('Kalimantan Selatan', 'Kota Banjarmasin', lat: -3.3194, lng: 114.5908),
+    RegionOption('Kalimantan Utara', 'Kabupaten Bulungan (Tanjung Selor)', lat: 2.8379, lng: 117.3653),
+    RegionOption('DKI Jakarta', 'Kota Jakarta Pusat', lat: -6.1751, lng: 106.8650),
+    RegionOption('Jawa Barat', 'Kota Bandung', lat: -6.9175, lng: 107.6191),
+    RegionOption('Jawa Timur', 'Kota Surabaya', lat: -7.2575, lng: 112.7521),
+    RegionOption('Jawa Tengah', 'Kota Semarang', lat: -6.9667, lng: 110.4167),
+    RegionOption('D.I. Yogyakarta', 'Kota Yogyakarta', lat: -7.7956, lng: 110.3695),
+    RegionOption('Banten', 'Kota Serang', lat: -6.1104, lng: 106.1640),
+    RegionOption('Bali', 'Kota Denpasar', lat: -8.6705, lng: 115.2126),
+    RegionOption('Sumatera Utara', 'Kota Medan', lat: 3.5952, lng: 98.6722),
+    RegionOption('Riau', 'Kota Pekanbaru', lat: 0.5071, lng: 101.4478),
+    RegionOption('Sumatera Selatan', 'Kota Palembang', lat: -2.9761, lng: 104.7754),
+    RegionOption('Sulawesi Selatan', 'Kota Makassar', lat: -5.1477, lng: 119.4327),
   ];
 
   final _searchController = TextEditingController();
-  RegionOption _selected = _regions.first;
+  RegionOption _selected = _popularRegions.first;
   String _query = '';
+  Timer? _debounceTimer;
+  List<GeoSearchResult> _searchResults = [];
+  bool _isSearching = false;
   bool _dialogOpen = false;
 
   @override
   void initState() {
     super.initState();
+    final currentLoc = AppSettings.instance.locationName;
+    final matched = RegionOption.matchFromSpeech(currentLoc, _popularRegions);
+    if (matched != null) {
+      _selected = matched;
+    }
     if (AppSettings.instance.voiceFlows) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _voiceRegion());
     }
   }
 
+  void _onSearchChanged(String val) {
+    setState(() => _query = val);
+    _debounceTimer?.cancel();
+    final q = val.trim();
+    if (q.length < 2) {
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+      });
+      return;
+    }
+    setState(() => _isSearching = true);
+    _debounceTimer = Timer(const Duration(milliseconds: 400), () async {
+      final res = await LocationService.instance.searchLocations(q);
+      if (!mounted) return;
+      setState(() {
+        _searchResults = res;
+        _isSearching = false;
+      });
+    });
+  }
+
   Future<void> _voiceRegion() async {
     final f = VoiceFlow(() => mounted);
     for (int i = 0; i < 3 && mounted; i++) {
-      final a = (await f.ask(
+      final a = await f.ask(
         i == 0
-            ? 'Pilih wilayah Anda. Sebutkan salah satu: Kalimantan Tengah, '
-                'Kalimantan Barat, Kalimantan Selatan, atau Kalimantan Utara.'
-            : 'Mohon sebutkan nama wilayahnya, misalnya Kalimantan Tengah.',
+            ? 'Pilih wilayah Anda. Sebutkan salah satu wilayah di Indonesia, seperti '
+                'Kalimantan Barat, Kalimantan Tengah, Jakarta, atau Jawa Barat.'
+            : 'Mohon sebutkan nama wilayahnya, misalnya Kalimantan Barat atau Kalimantan Tengah.',
         tries: 1,
-      ))
-          .toLowerCase();
+      );
       if (!mounted) return;
-      RegionOption? pick;
-      for (final r in _regions) {
-        final key = r.province.toLowerCase().split(' ').last;
-        if (a.contains(key) || a.contains(r.area.toLowerCase())) pick = r;
-      }
+      final pick = RegionOption.matchFromSpeech(a, _popularRegions);
       if (pick != null) {
-        setState(() => _selected = pick!);
+        setState(() => _selected = pick);
         await f.say('Wilayah ${pick.province}, ${pick.area}.');
         _confirm();
         return;
@@ -115,18 +236,42 @@ class _RegionPageState extends State<RegionPage> {
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
   List<RegionOption> get _visible {
     final q = _query.trim().toLowerCase();
-    if (q.isEmpty) return _regions;
-    return _regions
-        .where((r) =>
-            r.province.toLowerCase().contains(q) ||
-            r.area.toLowerCase().contains(q))
-        .toList();
+    if (q.isEmpty) return _popularRegions;
+
+    final List<RegionOption> results = [];
+    final Set<String> seen = {};
+
+    for (final r in _popularRegions) {
+      if (r.province.toLowerCase().contains(q) ||
+          r.area.toLowerCase().contains(q)) {
+        final key = '${r.province}_${r.area}'.toLowerCase();
+        if (!seen.contains(key)) {
+          seen.add(key);
+          results.add(r);
+        }
+      }
+    }
+
+    for (final s in _searchResults) {
+      final prov = s.province ?? s.cityOrRegency ?? 'Indonesia';
+      final area = s.subdistrict ?? s.name;
+      final key = '${prov}_$area'.toLowerCase();
+      final cleanArea = area.toLowerCase().replaceAll('kota ', '').replaceAll('kabupaten ', '').trim();
+      final isDup = seen.any((k) => k.contains(cleanArea));
+      if (!isDup && !seen.contains(key)) {
+        seen.add(key);
+        results.add(RegionOption(prov, area, lat: s.lat, lng: s.lng));
+      }
+    }
+
+    return results;
   }
 
   void _useCurrentLocation() {
@@ -134,9 +279,185 @@ class _RegionPageState extends State<RegionPage> {
       widget.onUseLocationTap!();
       return;
     }
+    _fetchGpsAndProceed();
+  }
+
+  Future<void> _fetchGpsAndProceed() async {
+    if (!mounted) return;
+
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      AppSettings.instance.setGpsStatus(GpsLocationStatus.serviceDisabled);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Layanan GPS pada perangkat sedang dinonaktifkan. Silakan aktifkan GPS atau pilih wilayah secara manual.',
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    final perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.deniedForever) {
+      AppSettings.instance.setGpsStatus(GpsLocationStatus.permanentlyDenied);
+      if (!mounted) return;
+      final open = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Izin Lokasi Ditolak Permanen'),
+          content: const Text(
+            'Akses GPS telah ditolak secara permanen. Buka pengaturan aplikasi untuk mengaktifkannya kembali agar TEDUH dapat mendeteksi lokasi otomatis?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Batal'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _RgColors.greenDeep,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Buka Pengaturan'),
+            ),
+          ],
+        ),
+      );
+      if (open == true) {
+        await Geolocator.openAppSettings();
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    _dialogOpen = true;
+    final dialog = showLocationPermissionDialog(context);
+    if (AppSettings.instance.voiceFlows) _voiceLocationChoice();
+    final choice = await dialog;
+    _dialogOpen = false;
+    VoiceService.instance.cancelAll();
+
+    if (choice == null || choice == LocationPermissionChoice.deny) {
+      AppSettings.instance.setGpsStatus(GpsLocationStatus.denied);
+      AppSettings.instance.update(() => AppSettings.instance.locationChoice = 'deny');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Izin lokasi ditolak. Lokasi tidak diperbarui. Silakan pilih wilayah manual.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    AppSettings.instance.update(() => AppSettings.instance.locationChoice = choice.name);
+
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Fitur lokasi akan dihubungkan.')),
+      const SnackBar(
+        content: Row(
+          children: [
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            ),
+            SizedBox(width: 12),
+            Text('Mendeteksi lokasi GPS aktual...'),
+          ],
+        ),
+        duration: Duration(seconds: 15),
+      ),
     );
+
+    final result = await LocationService.instance.getCurrentLocation();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+    if (result.status == GpsLocationStatus.granted && result.isFromGps && result.lat != null && result.lng != null) {
+      AppSettings.instance.setGpsLocation(
+        name: result.locationName,
+        lat: result.lat!,
+        lng: result.lng!,
+      );
+
+      await MonitoringState.instance.setCustomLocation(
+        name: result.locationName,
+        lat: result.lat!,
+        lng: result.lng!,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Lokasi GPS ditemukan: ${result.locationName}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HomePage()),
+        );
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.errorMessage ?? 'Gagal mendeteksi koordinat GPS. Lokasi sebelumnya dipertahankan.',
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  String _formatLocation(RegionOption r) {
+    final prov = r.province.toLowerCase();
+    if (prov.contains('tengah')) {
+      return 'Stasiun Palangka Raya, Kalimantan Tengah';
+    } else if (prov.contains('timur')) {
+      return 'Stasiun Samarinda, Kalimantan Timur';
+    } else if (prov.contains('barat') && prov.contains('kalimantan')) {
+      return 'Stasiun Pontianak, Kalimantan Barat';
+    } else if (prov.contains('selatan') && prov.contains('kalimantan')) {
+      return 'Stasiun Banjarmasin, Kalimantan Selatan';
+    } else if (prov.contains('utara') && prov.contains('kalimantan')) {
+      return 'Stasiun Tanjung Selor, Kalimantan Utara';
+    } else if (prov.contains('jakarta')) {
+      return 'Stasiun Bundaran HI, DKI Jakarta';
+    } else if (prov.contains('jawa barat')) {
+      return 'Stasiun Bandung, Jawa Barat';
+    } else if (prov.contains('jawa timur')) {
+      return 'Stasiun Surabaya, Jawa Timur';
+    } else if (prov.contains('jawa tengah')) {
+      return 'Stasiun Semarang, Jawa Tengah';
+    } else if (prov.contains('yogyakarta')) {
+      return 'Stasiun Yogyakarta, D.I. Yogyakarta';
+    } else if (prov.contains('bali')) {
+      return 'Stasiun Denpasar, Bali';
+    } else if (prov.contains('sumatera utara')) {
+      return 'Stasiun Medan, Sumatera Utara';
+    } else if (prov.contains('riau')) {
+      return 'Stasiun Pekanbaru, Riau';
+    } else if (prov.contains('sumatera selatan')) {
+      return 'Stasiun Palembang, Sumatera Selatan';
+    } else if (prov.contains('sulawesi selatan')) {
+      return 'Stasiun Makassar, Sulawesi Selatan';
+    }
+    return '${r.area}, ${r.province}';
   }
 
   Future<void> _confirm() async {
@@ -151,15 +472,56 @@ class _RegionPageState extends State<RegionPage> {
     _dialogOpen = false;
     VoiceService.instance.cancelAll();
 
-    if (choice == null || !mounted) return;
+    if (choice == null || choice == LocationPermissionChoice.deny) {
+      AppSettings.instance.setGpsStatus(GpsLocationStatus.denied);
+      AppSettings.instance.update(() => AppSettings.instance.locationChoice = 'deny');
+      widget.onLocationPermission?.call(LocationPermissionChoice.deny);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Izin lokasi ditolak. Lokasi tidak diperbarui. Anda dapat memilih wilayah secara manual melalui pencarian.',
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
     AppSettings.instance.update(
         () => AppSettings.instance.locationChoice = choice.name);
     widget.onLocationPermission?.call(choice);
 
-    navigator.pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const HomePage()),
-      (route) => false,
+    final displayLoc = _selected.lat != null
+        ? '${_selected.area}, ${_selected.province}'
+        : _formatLocation(_selected);
+    AppSettings.instance.setManualLocation(
+      displayLoc,
+      lat: _selected.lat,
+      lng: _selected.lng,
     );
+
+    if (_selected.lat != null && _selected.lng != null) {
+      await MonitoringState.instance.setCustomLocation(
+        name: displayLoc,
+        lat: _selected.lat!,
+        lng: _selected.lng!,
+      );
+    } else {
+      final matchedRegion = MonitoringRegion.matchFromText(_selected.province);
+      if (matchedRegion != null) {
+        await MonitoringState.instance.setRegion(matchedRegion);
+      }
+    }
+
+    if (!mounted) return;
+    if (navigator.canPop()) {
+      navigator.pop();
+    } else {
+      navigator.pushReplacement(
+        MaterialPageRoute(builder: (_) => const HomePage()),
+      );
+    }
   }
 
   @override
@@ -218,7 +580,11 @@ class _RegionPageState extends State<RegionPage> {
                     child: Padding(
                       padding: EdgeInsets.only(left: 19 * s),
                       child: Text(
-                        'Wilayah populer',
+                        _query.trim().isNotEmpty && _searchResults.isNotEmpty
+                            ? 'Hasil pencarian wilayah (${items.length})'
+                            : (_query.trim().isNotEmpty
+                                ? 'Wilayah cocok'
+                                : 'Wilayah populer & stasiun nasional'),
                         style: GoogleFonts.inter(
                           fontSize: 9.5 * s,
                           fontWeight: FontWeight.w500,
@@ -230,8 +596,8 @@ class _RegionPageState extends State<RegionPage> {
                   SizedBox(height: 11 * s),
                   for (var i = 0; i < items.length; i++)
                     _FadeInUp(
-                      key: ValueKey(items[i].province),
-                      delayMs: 380 + i * 70,
+                      key: ValueKey('${items[i].province}_${items[i].area}_$i'),
+                      delayMs: 380 + i * 40,
                       dy: 24 * s,
                       child: Padding(
                         padding: EdgeInsets.only(bottom: 8 * s),
@@ -366,11 +732,11 @@ class _RegionPageState extends State<RegionPage> {
         ),
         child: TextField(
           controller: _searchController,
-          onChanged: (v) => setState(() => _query = v),
+          onChanged: _onSearchChanged,
           style: GoogleFonts.inter(
               fontSize: 9.5 * s, color: const Color(0xFF2B3F38)),
           decoration: InputDecoration(
-            hintText: 'Cari kota atau kecamatan...',
+            hintText: 'Cari kota atau kecamatan se-Indonesia...',
             hintStyle: GoogleFonts.inter(
               fontSize: 9.5 * s,
               color: const Color(0xFF8A9A93),
@@ -378,6 +744,31 @@ class _RegionPageState extends State<RegionPage> {
             prefixIcon: Icon(Icons.search_rounded,
                 size: 17 * s, color: _RgColors.green),
             prefixIconConstraints:
+                BoxConstraints(minWidth: 38 * s, minHeight: 0),
+            suffixIcon: _isSearching
+                ? Padding(
+                    padding: EdgeInsets.all(11 * s),
+                    child: SizedBox(
+                      width: 14 * s,
+                      height: 14 * s,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: _RgColors.green,
+                      ),
+                    ),
+                  )
+                : (_query.isNotEmpty
+                    ? GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          _searchController.clear();
+                          _onSearchChanged('');
+                        },
+                        child: Icon(Icons.close_rounded,
+                            size: 14 * s, color: _RgColors.body),
+                      )
+                    : null),
+            suffixIconConstraints:
                 BoxConstraints(minWidth: 38 * s, minHeight: 0),
             isDense: true,
             filled: false,
