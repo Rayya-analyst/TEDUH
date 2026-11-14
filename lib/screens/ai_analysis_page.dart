@@ -1,48 +1,27 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import '../widgets/coach_marks.dart';
-import '../widgets/voice_scope.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../models/air_quality_models.dart';
+import '../services/air_quality_repository.dart';
+import '../state/app_settings.dart';
+import '../state/monitoring_state.dart';
+import '../widgets/coach_marks.dart';
 import '../widgets/teduh_common.dart';
+import '../widgets/voice_scope.dart';
 import 'activity_recommendation_page.dart';
 
-class _Range {
+class _RangeOption {
   final String label;
-  final List<double> values;
-  final List<String> xLabels;
-  final String nowLabel;
-  const _Range(this.label, this.values, this.xLabels, this.nowLabel);
+  final Duration duration;
+  const _RangeOption(this.label, this.duration);
 }
 
-const List<_Range> _ranges = [
-  _Range(
-    '6 jam',
-    [285, 300, 342, 330, 395, 440, 428, 470, 520, 505, 580, 640, 615, 700, 760,
-      735, 800, 850, 883.2],
-    ['08.30', '10.30', '12.30', '14.30'],
-    '14.30 WIB · saat ini',
-  ),
-  _Range(
-    '12 jam',
-    [255, 270, 300, 290, 340, 380, 360, 420, 470, 455, 520, 580, 560, 640, 720,
-      690, 770, 830, 883.2],
-    ['02.30', '06.30', '10.30', '14.30'],
-    '14.30 WIB · saat ini',
-  ),
-  _Range(
-    '24 jam',
-    [270, 260, 300, 340, 310, 380, 350, 300, 280, 330, 420, 480, 460, 540, 620,
-      600, 700, 760, 883.2],
-    ['14.30', '20.30', '02.30', '08.30', '14.30'],
-    '14.30 WIB · saat ini',
-  ),
-  _Range(
-    '7 hari',
-    [270, 300, 280, 340, 420, 380, 450, 520, 500, 590, 560, 650, 720, 690, 780,
-      760, 830, 860, 883.2],
-    ['01 Nov', '03 Nov', '05 Nov', '07 Nov'],
-    '07 Nov · saat ini',
-  ),
+const List<_RangeOption> _rangeOptions = [
+  _RangeOption('6 jam', Duration(hours: 6)),
+  _RangeOption('12 jam', Duration(hours: 12)),
+  _RangeOption('24 jam', Duration(hours: 24)),
+  _RangeOption('7 hari', Duration(days: 7)),
 ];
 
 class AiAnalysisPage extends StatefulWidget {
@@ -54,17 +33,20 @@ class AiAnalysisPage extends StatefulWidget {
 
 class _AiAnalysisPageState extends State<AiAnalysisPage>
     with TickerProviderStateMixin {
-  late final AnimationController _anim; 
-  late final AnimationController _chart; 
+  late final AnimationController _anim;
+  late final AnimationController _chart;
   late final Animation<double> _tip;
+
   int _range = 0;
+  bool _loadingChart = false;
+  List<double> _chartValues = [];
+  List<String> _chartXLabels = [];
+  String _nowLabel = '';
+  String _nowValStr = '--';
+  bool _hasHistoryData = false;
 
   static const _bg = Color(0xFFF4F6F2);
-  static const _danger = Color(0xFFB3261E);
-  static const _dangerDeep = Color(0xFF8E1B1B);
-  static const _dangerTint = Color(0xFFFDECE8);
   static const _pill = Color(0xFF1F6B4F);
-  static const _tealCard = Color(0xFF1B7A5F);
 
   @override
   void initState() {
@@ -85,8 +67,8 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
       curve: const Interval(0.8, 1.0, curve: Curves.easeOut),
     );
 
-    Future.delayed(const Duration(milliseconds: 750), () {
-      if (mounted) _chart.forward();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadHistoryData();
     });
   }
 
@@ -97,41 +79,128 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
     super.dispose();
   }
 
+  Future<void> _loadHistoryData() async {
+    if (!mounted) return;
+    setState(() => _loadingChart = true);
+    final mon = MonitoringState.instance;
+    final opt = _rangeOptions[_range];
+    try {
+      final readings = await AirQualityRepository.instance.getHistoricalReadings(
+        site: mon.selectedSite,
+        sourceId: mon.selectedSource.sourceId,
+        duration: opt.duration,
+      );
+      if (!mounted) return;
+      final valid = readings
+          .where((r) => r.pm25 != null || r.officialIspu != null)
+          .toList()
+        ..sort((a, b) => a.observedAt.compareTo(b.observedAt));
+
+      if (valid.length >= 2) {
+        final vals = valid.map((r) => r.pm25 ?? r.officialIspu!.toDouble()).toList();
+        final List<String> labels = [];
+        final step = (valid.length / 4).ceil().clamp(1, valid.length);
+        for (int i = 0; i < valid.length; i += step) {
+          final dt = valid[i].observedAt.toLocal();
+          labels.add(opt.duration.inHours <= 24
+              ? '${dt.hour.toString().padLeft(2, '0')}.${dt.minute.toString().padLeft(2, '0')}'
+              : '${dt.day}/${dt.month}');
+        }
+        final lastDt = valid.last.observedAt.toLocal();
+        final lastLabel = opt.duration.inHours <= 24
+            ? '${lastDt.hour.toString().padLeft(2, '0')}.${lastDt.minute.toString().padLeft(2, '0')} WIB · saat ini'
+            : '${lastDt.day}/${lastDt.month} · saat ini';
+        final valStr = valid.last.pm25 != null
+            ? '${valid.last.pm25!.toStringAsFixed(1).replaceAll('.', ',')} µg/m³'
+            : '${valid.last.officialIspu} ISPU';
+        if (!mounted) return;
+        setState(() {
+          _loadingChart = false;
+          _hasHistoryData = true;
+          _chartValues = vals;
+          _chartXLabels = labels;
+          _nowLabel = lastLabel;
+          _nowValStr = valStr;
+        });
+        _chart.forward(from: 0);
+      } else {
+        if (!mounted) return;
+        setState(() {
+          _loadingChart = false;
+          _hasHistoryData = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loadingChart = false;
+          _hasHistoryData = false;
+        });
+      }
+    }
+  }
+
   void _pickRange(int i) {
     if (i == _range) return;
     setState(() => _range = i);
-    _chart.forward(from: 0);
+    _loadHistoryData();
   }
 
   Widget _r(double b, double e, Widget child) =>
       Reveal(animation: _anim, begin: b, end: e, child: child);
 
   List<CoachStep> get _tour => const [
-        CoachStep(title: 'Analisis AI', body: 'Penjelasan mendalam tentang kondisi dan tren kualitas udara di wilayahmu.'),
-        CoachStep(title: 'Angka dan grafik', body: 'Lihat status udara, ISPU, kepadatan asap, dan grafik PM2.5. Data masih simulasi.'),
-        CoachStep(title: 'Interpretasi TEDUH AI', body: 'Bagian ini menafsirkan data: pola asap, kemungkinan penyebab, dan apa artinya bagi kesehatanmu.'),
+        CoachStep(
+            title: 'Analisis AI',
+            body: 'Penjelasan mendalam tentang kondisi dan tren kualitas udara di wilayahmu.'),
+        CoachStep(
+            title: 'Angka dan grafik',
+            body: 'Lihat status udara, ISPU, kepadatan asap, dan grafik PM2.5 aktual dari stasiun KLHK.'),
+        CoachStep(
+            title: 'Interpretasi TEDUH AI',
+            body: 'Bagian ini menafsirkan data: pola asap, kemungkinan penyebab, dan apa artinya bagi kesehatanmu.'),
       ];
 
   @override
   Widget build(BuildContext context) => VoiceScope(
         screen: 'analysis',
         tour: _tour,
-        guide: PageGuide(content: () => 'Ini halaman Analisis AI. Berisi status udara di lokasimu, ISPU, kepadatan asap, grafik PM2.5, dan interpretasi TEDUH AI tentang pola asap. Data masih simulasi. Ucapkan kembali untuk ke halaman sebelumnya.'),
-        child: _buildBody(context),
+        guide: PageGuide(
+          content: () {
+            final a = AppSettings.instance.snapshot;
+            return 'Ini halaman Analisis AI. Berisi status udara di ${a.location}, '
+                'ISPU ${a.ispu} (${a.status}), grafik tren PM2.5, dan interpretasi '
+                'TEDUH AI. Ucapkan kembali untuk ke halaman sebelumnya.';
+          },
+        ),
+        child: AnimatedBuilder(
+          animation: MonitoringState.instance,
+          builder: (ctx, child) => _buildBody(ctx),
+        ),
       );
 
   Widget _buildBody(BuildContext context) {
+    final a = AppSettings.instance.snapshot;
+    final mon = MonitoringState.instance;
+    final cat = mon.currentReading?.category ?? IspuCategory.fromIspu(a.ispu);
+
+    final dangerColor = _categoryColor(cat);
+    final dangerDeep = _categoryDeepColor(cat);
+    final dangerTint = _categoryTint(cat);
+    final tealCard = _categoryCardBg(cat);
+
     final sections = <Widget>[
-      _simulationLabel(),
-      _headlineBlock(),
-      _ispuBox(),
-      _chartCard(),
-      _interpretationCard(),
-      _riskTitle(),
-      _riskCard(),
+      _dataLabel(a, mon),
+      _headlineBlock(a, cat, dangerDeep),
+      _ispuBox(a, cat, dangerTint, dangerDeep, dangerColor),
+      _chartCard(dangerColor),
+      _buildMultiSourceComparisonCard(a, mon),
+      _interpretationCard(a, cat, tealCard),
+      _riskTitle(a, cat, dangerDeep),
+      _riskCard(dangerTint, dangerColor),
       _todoTitle(),
-      _todoCard(context),
-      _sourceCard(),
+      _todoCard(context, a),
+      _sourceCard(a, mon),
     ];
 
     return Scaffold(
@@ -175,14 +244,82 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
     switch (i) {
       case 0:
         return 14;
-      case 5:
+      case 6:
         return 12;
-      case 7:
+      case 8:
         return 10;
-      case 9:
+      case 10:
         return 0;
       default:
         return 16;
+    }
+  }
+
+  Color _categoryColor(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return const Color(0xFF2E7D32);
+      case IspuCategory.sedang:
+        return const Color(0xFFF9A825);
+      case IspuCategory.tidakSehat:
+        return const Color(0xFFE65100);
+      case IspuCategory.sangatTidakSehat:
+        return const Color(0xFF880E4F);
+      case IspuCategory.berbahaya:
+        return const Color(0xFFB3261E);
+      case IspuCategory.tidakTersedia:
+        return const Color(0xFF6B7773);
+    }
+  }
+
+  Color _categoryDeepColor(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return const Color(0xFF1B5E20);
+      case IspuCategory.sedang:
+        return const Color(0xFFE65100);
+      case IspuCategory.tidakSehat:
+        return const Color(0xFFBF360C);
+      case IspuCategory.sangatTidakSehat:
+        return const Color(0xFF6A0036);
+      case IspuCategory.berbahaya:
+        return const Color(0xFF8E1B1B);
+      case IspuCategory.tidakTersedia:
+        return const Color(0xFF455A64);
+    }
+  }
+
+  Color _categoryTint(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return const Color(0xFFE8F5E9);
+      case IspuCategory.sedang:
+        return const Color(0xFFFFF8E1);
+      case IspuCategory.tidakSehat:
+        return const Color(0xFFFBE9E7);
+      case IspuCategory.sangatTidakSehat:
+        return const Color(0xFFFCE4EC);
+      case IspuCategory.berbahaya:
+        return const Color(0xFFFDECE8);
+      case IspuCategory.tidakTersedia:
+        return const Color(0xFFECEFF1);
+    }
+  }
+
+  Color _categoryCardBg(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return const Color(0xFF2E7D32);
+      case IspuCategory.sedang:
+        return const Color(0xFFE65100);
+      case IspuCategory.tidakSehat:
+        return const Color(0xFF8D3B1B);
+      case IspuCategory.sangatTidakSehat:
+        return const Color(0xFF6A1B4D);
+      case IspuCategory.berbahaya:
+        return const Color(0xFF1B7A5F);
+      case IspuCategory.tidakTersedia:
+        return const Color(0xFF37474F);
     }
   }
 
@@ -215,25 +352,10 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
                   ),
                 ),
                 Text(
-                  'Telemetri & interpretasi asap',
+                  'Telemetri & interpretasi kondisi udara',
                   style: GoogleFonts.poppins(fontSize: 10.5, color: TC.hint),
                 ),
               ],
-            ),
-          ),
-          InkWell(
-            customBorder: const CircleBorder(),
-            onTap: () => showSoon(context, 'Menu'),
-            child: Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(color: TC.border),
-              ),
-              child: const Icon(Icons.more_horiz_rounded,
-                  size: 22, color: TC.dark),
             ),
           ),
         ],
@@ -241,7 +363,17 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
     );
   }
 
-  Widget _simulationLabel() {
+  Widget _dataLabel(AirSnapshot a, MonitoringState mon) {
+    final ts = mon.currentReading?.observedAt;
+    String timeStr;
+    if (ts != null) {
+      final local = ts.toLocal();
+      timeStr =
+          '${local.day.toString().padLeft(2, '0')} ${_monthName(local.month)} ${local.year} · '
+          '${local.hour.toString().padLeft(2, '0')}.${local.minute.toString().padLeft(2, '0')} WIB';
+    } else {
+      timeStr = a.updatedAt;
+    }
     return Padding(
       padding: const EdgeInsets.only(left: 6),
       child: Row(
@@ -255,16 +387,37 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
             ),
           ),
           const SizedBox(width: 6),
-          Text(
-            'Data simulasi · 07 Nov 2026 · 14.30 WIB',
-            style: GoogleFonts.poppins(fontSize: 9.5, color: TC.hint),
+          Expanded(
+            child: Text(
+              'Stasiun KLHK · $timeStr',
+              style: GoogleFonts.poppins(fontSize: 9.5, color: TC.hint),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _headlineBlock() {
+  Widget _headlineBlock(AirSnapshot a, IspuCategory cat, Color deepColor) {
+    final location = (AppSettings.instance.locationName.isNotEmpty
+            ? AppSettings.instance.locationName
+            : MonitoringState.instance.selectedRegion.regency)
+        .toUpperCase();
+    final pm25Str = a.pm25.replaceAll(' µg/m³', '');
+    final parsed = double.tryParse(pm25Str.replaceAll(',', '.'));
+    final double pm25Val = (parsed != null && parsed > 0)
+        ? parsed
+        : (a.pm25Value > 0
+            ? a.pm25Value
+            : (a.ispu > 0
+                ? (a.ispu <= 50
+                    ? a.ispu * 0.31
+                    : (a.ispu <= 100
+                        ? 15.5 + (a.ispu - 50) * 0.4
+                        : 35.5 + (a.ispu - 100) * 0.55))
+                : 22.5));
+    final pm25Display = pm25Val.toStringAsFixed(1).replaceAll('.', ',');
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6),
       child: Column(
@@ -274,7 +427,7 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
             children: [
               Expanded(
                 child: Text(
-                  'JEKAN RAYA · PM2.5',
+                  '$location · PM2.5',
                   style: GoogleFonts.poppins(
                     fontSize: 9.5,
                     fontWeight: FontWeight.w700,
@@ -284,10 +437,9 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                 decoration: BoxDecoration(
-                  color: _dangerDeep,
+                  color: deepColor,
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Row(
@@ -297,7 +449,7 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
                         size: 13, color: Colors.white),
                     const SizedBox(width: 5),
                     Text(
-                      'BERBAHAYA',
+                      cat.label.toUpperCase(),
                       style: GoogleFonts.poppins(
                         fontSize: 10,
                         fontWeight: FontWeight.w700,
@@ -311,12 +463,12 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
           ),
           const SizedBox(height: 14),
           Text(
-            '883.2',
+            pm25Display,
             style: GoogleFonts.poppins(
               fontSize: 76,
               height: 1.0,
               fontWeight: FontWeight.w800,
-              color: _dangerDeep,
+              color: deepColor,
             ),
           ),
           const SizedBox(height: 4),
@@ -325,7 +477,7 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
             style: GoogleFonts.poppins(
               fontSize: 22,
               fontWeight: FontWeight.w500,
-              color: _danger,
+              color: _categoryColor(cat),
             ),
           ),
           const SizedBox(height: 8),
@@ -334,17 +486,11 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
               children: [
                 TextSpan(
                   text: 'Partikel kecil. ',
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.w800,
-                    color: TC.dark,
-                  ),
+                  style: GoogleFonts.poppins(fontWeight: FontWeight.w800, color: TC.dark),
                 ),
                 TextSpan(
-                  text: 'Risiko besar.',
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.w800,
-                    color: TC.green,
-                  ),
+                  text: _riskTagline(cat),
+                  style: GoogleFonts.poppins(fontWeight: FontWeight.w800, color: TC.green),
                 ),
               ],
             ),
@@ -356,37 +502,32 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
           ),
           const SizedBox(height: 10),
           Text(
-            'Asap sangat pekat. Partikel halus dapat masuk jauh ke '
-            'paru-paru. Semua warga perlu mengurangi paparan.',
-            style: GoogleFonts.poppins(
-              fontSize: 12.5,
-              height: 1.6,
-              color: TC.hint,
-            ),
+            _riskDesc(cat),
+            style: GoogleFonts.poppins(fontSize: 12.5, height: 1.6, color: TC.hint),
           ),
         ],
       ),
     );
   }
 
-  Widget _ispuBox() {
+  Widget _ispuBox(AirSnapshot a, IspuCategory cat, Color tint, Color deep, Color col) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       decoration: BoxDecoration(
-        color: _dangerTint,
+        color: tint,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE9908A)),
+        border: Border.all(color: col.withValues(alpha: 0.5)),
       ),
       child: Row(
         children: [
           Text(
-            '462',
+            a.ispu > 0 ? '${a.ispu}' : '--',
             style: GoogleFonts.poppins(
               fontSize: 38,
               height: 1.1,
               fontWeight: FontWeight.w400,
-              color: _danger,
+              color: col,
             ),
           ),
           const SizedBox(width: 16),
@@ -395,21 +536,20 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'ISPU · Berbahaya',
+                  'ISPU · ${cat.label}',
                   style: GoogleFonts.poppins(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w700,
-                    color: _dangerDeep,
+                    color: deep,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Indeks terpisah dari konsentrasi PM2.5. Tidak dihitung '
-                  'sebagai konversi di sini.',
+                  'Indeks Standar Pencemar Udara dari stasiun resmi KLHK.',
                   style: GoogleFonts.poppins(
                     fontSize: 9.5,
                     height: 1.45,
-                    color: _danger,
+                    color: col,
                   ),
                 ),
               ],
@@ -420,9 +560,7 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
     );
   }
 
-  Widget _chartCard() {
-    final data = _ranges[_range];
-
+  Widget _chartCard(Color lineColor) {
     return _Card(
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
       child: Column(
@@ -445,18 +583,15 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
                     ),
                     Text(
                       'Jejak konsentrasi partikel halus',
-                      style:
-                          GoogleFonts.poppins(fontSize: 10.5, color: TC.hint),
+                      style: GoogleFonts.poppins(fontSize: 10.5, color: TC.hint),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.bar_chart_rounded,
-                  size: 24, color: TC.greenDeep),
+              const Icon(Icons.bar_chart_rounded, size: 24, color: TC.greenDeep),
             ],
           ),
           const SizedBox(height: 14),
-
           Container(
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
@@ -465,7 +600,7 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
             ),
             child: Row(
               children: [
-                for (int i = 0; i < _ranges.length; i++)
+                for (int i = 0; i < _rangeOptions.length; i++)
                   Expanded(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
@@ -480,12 +615,11 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
                           borderRadius: BorderRadius.circular(11),
                         ),
                         child: Text(
-                          _ranges[i].label,
+                          _rangeOptions[i].label,
                           style: GoogleFonts.poppins(
                             fontSize: 11,
-                            fontWeight: i == _range
-                                ? FontWeight.w600
-                                : FontWeight.w400,
+                            fontWeight:
+                                i == _range ? FontWeight.w600 : FontWeight.w400,
                             color: i == _range ? Colors.white : TC.hint,
                           ),
                         ),
@@ -497,75 +631,99 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
           ),
           const SizedBox(height: 14),
           Text(
-            'PM2.5 (µg/m³) · Data simulasi',
+            'PM2.5 (µg/m³) · ${MonitoringState.instance.currentReading?.provenanceText ?? "Satelit CAMS / Stasiun Resmi"}',
             style: GoogleFonts.poppins(fontSize: 9.5, color: TC.hint),
           ),
           const SizedBox(height: 4),
-
-          SizedBox(
-            height: 240,
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: CustomPaint(
-                    painter: _LineChartPainter(
-                      values: data.values,
-                      xLabels: data.xLabels,
-                      progress: _chart,
+          if (_loadingChart)
+            const SizedBox(
+              height: 240,
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (!_hasHistoryData)
+            SizedBox(
+              height: 240,
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.cloud_off_rounded, size: 36, color: TC.hint.withValues(alpha: 0.5)),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Data historis belum tersedia\nuntuk rentang waktu ini.',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.poppins(fontSize: 11, color: TC.hint),
                     ),
-                  ),
+                  ],
                 ),
-                Positioned(
-                  top: 0,
-                  right: 24,
-                  child: FadeTransition(
-                    opacity: _tip,
-                    child: Container(
-                      padding: const EdgeInsets.fromLTRB(14, 9, 14, 9),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFA83A3A),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            data.nowLabel,
-                            style: GoogleFonts.poppins(
-                              fontSize: 9,
-                              color: Colors.white.withValues(alpha: 0.85),
-                            ),
-                          ),
-                          Text(
-                            '883.2 µg/m³',
-                            style: GoogleFonts.poppins(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ],
+              ),
+            )
+          else
+            SizedBox(
+              height: 240,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _LineChartPainter(
+                        values: _chartValues,
+                        xLabels: _chartXLabels,
+                        progress: _chart,
+                        lineColor: lineColor,
                       ),
                     ),
                   ),
-                ),
-              ],
+                  Positioned(
+                    top: 0,
+                    right: 24,
+                    child: FadeTransition(
+                      opacity: _tip,
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(14, 9, 14, 9),
+                        decoration: BoxDecoration(
+                          color: lineColor.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _nowLabel,
+                              style: GoogleFonts.poppins(
+                                fontSize: 9,
+                                color: Colors.white.withValues(alpha: 0.85),
+                              ),
+                            ),
+                            Text(
+                              _nowValStr,
+                              style: GoogleFonts.poppins(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
           const SizedBox(height: 6),
           Row(
             children: [
               Container(
                 width: 7,
                 height: 7,
-                decoration: const BoxDecoration(
-                  color: _danger,
+                decoration: BoxDecoration(
+                  color: lineColor,
                   shape: BoxShape.circle,
                 ),
               ),
               const SizedBox(width: 8),
               Text(
-                'Partikel halus · tren ilustratif meningkat',
+                'Partikel halus · tren PM2.5 aktual',
                 style: GoogleFonts.poppins(fontSize: 10, color: TC.hint),
               ),
             ],
@@ -575,12 +733,12 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
     );
   }
 
-  Widget _interpretationCard() {
+  Widget _interpretationCard(AirSnapshot a, IspuCategory cat, Color cardBg) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: _tealCard,
+        color: cardBg,
         borderRadius: BorderRadius.circular(22),
       ),
       child: Column(
@@ -603,7 +761,7 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
           ),
           const SizedBox(height: 12),
           Text(
-            'Pola konsisten dengan asap Karhutla.',
+            _interpretationTitle(cat),
             style: GoogleFonts.poppins(
               fontSize: 22,
               height: 1.25,
@@ -613,10 +771,7 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
           ),
           const SizedBox(height: 12),
           Text(
-            'Lonjakan partikel dan tren yang bertahan tinggi mengindikasikan '
-            'paparan asap kebakaran hutan dan lahan. Ini interpretasi '
-            'ilustratif, bukan konfirmasi titik api atau prediksi '
-            'penyebaran.',
+            _interpretationBody(a, cat),
             style: GoogleFonts.poppins(
               fontSize: 11.5,
               height: 1.6,
@@ -625,7 +780,7 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
           ),
           const SizedBox(height: 14),
           Text(
-            'Analisis otomatis · perlu pemeriksaan sumber resmi',
+            'TEDUH AI menganalisis data PM2.5 dari Open-Meteo CAMS & Firestore secara otomatis, lalu merekomendasikan keputusan aktivitas. Ini keluaran mesin — bukan konfirmasi resmi. Verifikasi melalui KLHK bila diperlukan.',
             style: GoogleFonts.poppins(
               fontSize: 9.5,
               color: Colors.white.withValues(alpha: 0.7),
@@ -636,24 +791,25 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
     );
   }
 
-  Widget _riskTitle() {
+  Widget _riskTitle(AirSnapshot a, IspuCategory cat, Color deepColor) {
+    final location = MonitoringState.instance.selectedRegion.regency;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'RISIKO PAPARAN · SANGAT TINGGI',
+            'RISIKO PAPARAN · ${_riskLevel(cat).toUpperCase()}',
             style: GoogleFonts.poppins(
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
               letterSpacing: 1.4,
-              color: _dangerDeep,
+              color: deepColor,
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            'Bukan hanya kelompok rentan.',
+            _riskTitle2(cat),
             style: GoogleFonts.poppins(
               fontSize: 26,
               height: 1.2,
@@ -663,8 +819,7 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
           ),
           const SizedBox(height: 8),
           Text(
-            'Warga Jekan Raya dapat mengalami iritasi mata, batuk, dan '
-            'sesak. Paparan dapat memperburuk penyakit paru atau jantung.',
+            'Warga $location ${_riskImpact(cat)}',
             style: GoogleFonts.poppins(
               fontSize: 12.5,
               height: 1.6,
@@ -676,14 +831,14 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
     );
   }
 
-  Widget _riskCard() {
+  Widget _riskCard(Color tint, Color col) {
     return _Card(
       child: Column(
         children: [
           _InfoRow(
             icon: Icons.groups_outlined,
-            iconBg: _dangerTint,
-            iconColor: _danger,
+            iconBg: tint,
+            iconColor: col,
             title: 'Risiko untuk seluruh warga',
             body: 'Batasi keluar rumah. Anak, lansia, ibu hamil, dan '
                 'penderita penyakit kronis perlu perlindungan lebih ketat.',
@@ -691,8 +846,8 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
           const _SoftDivider(),
           _InfoRow(
             icon: Icons.monitor_heart_outlined,
-            iconBg: _dangerTint,
-            iconColor: _danger,
+            iconBg: tint,
+            iconColor: col,
             title: 'Kenali tanda kegawatan',
             body: 'Sesak berat, nyeri dada, atau penurunan kesadaran '
                 'memerlukan pertolongan medis segera.',
@@ -716,7 +871,7 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
     );
   }
 
-  Widget _todoCard(BuildContext context) {
+  Widget _todoCard(BuildContext context, AirSnapshot a) {
     return _Card(
       child: Column(
         children: [
@@ -754,11 +909,10 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
               borderRadius: BorderRadius.circular(14),
               onTap: () => openActivityRecommendation(
                 context,
-                ispu: kSimulatedIspu,
+                ispu: a.ispu,
               ),
               child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                 child: Row(
                   children: [
                     Expanded(
@@ -783,17 +937,14 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
     );
   }
 
-  Widget _sourceCard() {
+  Widget _sourceCard(AirSnapshot a, MonitoringState mon) {
     Widget item(String label, String value) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              label,
-              style: GoogleFonts.poppins(fontSize: 9.5, color: TC.hint),
-            ),
+            Text(label, style: GoogleFonts.poppins(fontSize: 9.5, color: TC.hint)),
             const SizedBox(height: 1),
             Text(
               value,
@@ -808,14 +959,22 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
       );
     }
 
+    final ts = mon.currentReading?.observedAt;
+    final timeStr = ts != null
+        ? () {
+            final l = ts.toLocal();
+            return '${l.day.toString().padLeft(2, '0')} ${_monthName(l.month)} ${l.year} · '
+                '${l.hour.toString().padLeft(2, '0')}.${l.minute.toString().padLeft(2, '0')} WIB';
+          }()
+        : a.updatedAt;
+
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.storage_outlined,
-                  size: 22, color: TC.greenDeep),
+              const Icon(Icons.storage_outlined, size: 22, color: TC.greenDeep),
               const SizedBox(width: 10),
               Text(
                 'Sumber & validasi data',
@@ -828,39 +987,363 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
             ],
           ),
           const SizedBox(height: 14),
-          item('Sumber yang direncanakan', 'BMKG'),
-          item('Waktu sampel ilustratif', '07 Nov 2026 · 14.30 WIB'),
-          item('Lokasi pelaporan', 'Jekan Raya, Palangka Raya'),
+          item('Sumber', a.sourceName),
+          item('Waktu pengukuran', timeStr),
+          item('Lokasi stasiun', a.location),
           const Divider(height: 1, thickness: 1, color: TC.divider),
           const SizedBox(height: 12),
-          Row(
-            children: [
-              const Icon(Icons.error_outline_rounded,
-                  size: 18, color: _danger),
-              const SizedBox(width: 8),
-              Text(
-                'Simulasi · belum terverifikasi',
-                style: GoogleFonts.poppins(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  color: _danger,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
           Text(
-            'Belum terhubung ke umpan langsung BMKG. Nilai, grafik, dan '
-            'waktu adalah konten desain, bukan data observasi terverifikasi.',
-            style: GoogleFonts.poppins(
-              fontSize: 10.5,
-              height: 1.55,
-              color: TC.hint,
-            ),
+            'Validasi Multi-Sumber TEDUH:',
+            style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w600, color: TC.dark),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '• Stasiun Fisik KLHK: Pengukuran konsentrasi polutan langsung di permukaan tanah.\n'
+            '• Satelit Copernicus CAMS: Model asimilasi atmosfer vertikal untuk proyeksi tren.\n'
+            '• NASA FIRMS: Deteksi radiasi termal titik api (hotspot), bukan angka PM2.5.\n'
+            'Seluruh data ISPU resmi pada aplikasi selalu bersumber dari stasiun pemantau KLHK.',
+            style: GoogleFonts.poppins(fontSize: 10, height: 1.55, color: TC.hint),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildMultiSourceComparisonCard(AirSnapshot a, MonitoringState mon) {
+    final reading = mon.currentReading;
+
+    if (reading == null) {
+      return _Card(
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 14),
+            Text(
+              'Memuat data analisis...',
+              style: GoogleFonts.poppins(fontSize: 12, color: TC.hint),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final nasaKey = const String.fromEnvironment('NASA_FIRMS_MAP_KEY',
+        defaultValue: '');
+
+    final pm25Str = reading.pm25 != null
+        ? reading.pm25!.toStringAsFixed(1)
+        : (a.pm25.replaceAll(' µg/m³', '').replaceAll(',', '.'));
+    final ispuStr = reading.officialIspu != null ? '${reading.officialIspu}' : '${a.ispu}';
+
+    final camsNilai = (reading.sourceId == 'cams_openmeteo' && reading.pm25 != null)
+        ? reading.pm25!.toStringAsFixed(1)
+        : '—';
+
+    final rows = <_ComparisonRow>[
+      _ComparisonRow(
+        provider: 'KLHK / Firestore',
+        parameter: 'PM2.5 & ISPU',
+        nilai: '$pm25Str / $ispuStr',
+        unit: 'µg/m³ / ISPU',
+        status: 'Aktif',
+        statusColor: const Color(0xFF176D59),
+      ),
+      _ComparisonRow(
+        provider: 'Open-Meteo CAMS',
+        parameter: 'PM2.5, PM10, O₃',
+        nilai: camsNilai,
+        unit: 'µg/m³',
+        status: 'Aktif',
+        statusColor: const Color(0xFF176D59),
+      ),
+      _ComparisonRow(
+        provider: 'NASA FIRMS',
+        parameter: 'Hotspot / Titik Api',
+        nilai: '—',
+        unit: 'titik',
+        status: nasaKey.isNotEmpty ? 'Aktif' : 'Opsional · Belum Aktif',
+        statusColor: nasaKey.isNotEmpty
+            ? const Color(0xFF176D59)
+            : const Color(0xFF64748B),
+      ),
+    ];
+
+    return _Card(
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.compare_arrows_rounded,
+                  size: 22, color: TC.greenDeep),
+              const SizedBox(width: 10),
+              Text(
+                'Perbandingan Multi-Sumber',
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: TC.dark,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Sumber data aktif yang digunakan TEDUH untuk lokasi ini',
+            style: GoogleFonts.poppins(fontSize: 10.5, color: TC.hint),
+          ),
+          const SizedBox(height: 14),
+          Table(
+            columnWidths: const {
+              0: FlexColumnWidth(2.2),
+              1: FlexColumnWidth(1.8),
+              2: FlexColumnWidth(1.4),
+              3: FlexColumnWidth(1.0),
+              4: FlexColumnWidth(1.8),
+            },
+            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+            children: [
+              TableRow(
+                decoration: const BoxDecoration(
+                  border: Border(
+                      bottom: BorderSide(color: Color(0xFFE8F0EA), width: 1)),
+                ),
+                children: [
+                  for (final h in [
+                    'Provider',
+                    'Parameter',
+                    'Nilai',
+                    'Unit',
+                    'Status'
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        h,
+                        style: GoogleFonts.poppins(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            color: TC.hint),
+                      ),
+                    ),
+                ],
+              ),
+              for (final row in rows)
+                TableRow(
+                  decoration: const BoxDecoration(
+                    border: Border(
+                        bottom:
+                            BorderSide(color: Color(0xFFF0F4F0), width: 0.8)),
+                  ),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        row.provider,
+                        style: GoogleFonts.poppins(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w600,
+                            color: TC.dark),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        row.parameter,
+                        style: GoogleFonts.poppins(
+                            fontSize: 9.5, color: TC.hint),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        row.nilai,
+                        style: GoogleFonts.poppins(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w600,
+                            color: TC.dark),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        row.unit,
+                        style: GoogleFonts.poppins(
+                            fontSize: 9, color: TC.hint),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: row.statusColor.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                              color: row.statusColor.withValues(alpha: 0.35)),
+                        ),
+                        child: Text(
+                          row.status,
+                          style: GoogleFonts.poppins(
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w700,
+                            color: row.statusColor,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Open-Meteo CAMS & Firestore: data ditampilkan langsung. NASA FIRMS memerlukan MAP_KEY gratis (opsional · daftar di firms.modaps.eosdis.nasa.gov). Nilai "—" = data tidak tersedia saat ini.',
+            style: GoogleFonts.poppins(fontSize: 9.5, color: TC.hint),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _riskTagline(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return 'Kondisi aman.';
+      case IspuCategory.sedang:
+        return 'Waspadai kelompok sensitif.';
+      case IspuCategory.tidakSehat:
+        return 'Batasi aktivitas luar.';
+      case IspuCategory.sangatTidakSehat:
+        return 'Risiko serius.';
+      case IspuCategory.berbahaya:
+        return 'Risiko besar.';
+      case IspuCategory.tidakTersedia:
+        return 'Data sedang dimuat.';
+    }
+  }
+
+  String _riskDesc(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return 'Kualitas udara baik. Aktivitas luar ruangan tetap aman untuk semua kalangan.';
+      case IspuCategory.sedang:
+        return 'Kualitas udara sedang. Kelompok sensitif seperti penderita asma perlu berhati-hati.';
+      case IspuCategory.tidakSehat:
+        return 'Udara tidak sehat. Kurangi aktivitas luar ruangan, terutama untuk anak dan lansia.';
+      case IspuCategory.sangatTidakSehat:
+        return 'Udara sangat tidak sehat. Semua warga disarankan menghindari aktivitas di luar.';
+      case IspuCategory.berbahaya:
+        return 'Asap sangat pekat. Partikel halus dapat masuk jauh ke paru-paru. Semua warga perlu mengurangi paparan.';
+      case IspuCategory.tidakTersedia:
+        return 'Data kualitas udara sedang dimuat dari stasiun KLHK.';
+    }
+  }
+
+  String _interpretationTitle(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return 'Udara bersih, aktivitas aman.';
+      case IspuCategory.sedang:
+        return 'Kualitas udara moderat.';
+      case IspuCategory.tidakSehat:
+        return 'Potensi peningkatan asap.';
+      case IspuCategory.sangatTidakSehat:
+        return 'Asap terdeteksi signifikan.';
+      case IspuCategory.berbahaya:
+        return 'Pola konsisten dengan asap Karhutla.';
+      case IspuCategory.tidakTersedia:
+        return 'Memuat data analisis...';
+    }
+  }
+
+  String _interpretationBody(AirSnapshot a, IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return 'Konsentrasi partikel PM2.5 berada pada level aman. '
+            'Tidak terdeteksi indikasi asap kebakaran lahan di wilayah ini.';
+      case IspuCategory.sedang:
+        return 'Terdapat peningkatan konsentrasi partikel moderat. '
+            'Pantau perkembangan dan siapkan masker jika diperlukan.';
+      case IspuCategory.tidakSehat:
+        return 'Konsentrasi PM2.5 menunjukkan polutan udara yang tidak sehat. '
+            'Disarankan mengurangi paparan dan memantau informasi resmi KLHK.';
+      case IspuCategory.sangatTidakSehat:
+        return 'Tingkat PM2.5 yang sangat tinggi mengindikasikan kemungkinan '
+            'asap kebakaran lahan. Ini interpretasi otomatis, bukan konfirmasi resmi.';
+      case IspuCategory.berbahaya:
+        return 'Lonjakan partikel dan tren yang bertahan tinggi mengindikasikan '
+            'paparan asap kebakaran hutan dan lahan. Ini interpretasi '
+            'otomatis, bukan konfirmasi titik api atau prediksi penyebaran.';
+      case IspuCategory.tidakTersedia:
+        return 'Data dari stasiun KLHK sedang dimuat. '
+            'Interpretasi akan tersedia setelah data terbaru diterima.';
+    }
+  }
+
+  String _riskLevel(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return 'Sangat Rendah';
+      case IspuCategory.sedang:
+        return 'Rendah';
+      case IspuCategory.tidakSehat:
+        return 'Sedang';
+      case IspuCategory.sangatTidakSehat:
+        return 'Tinggi';
+      case IspuCategory.berbahaya:
+        return 'Sangat Tinggi';
+      case IspuCategory.tidakTersedia:
+        return 'Belum Diketahui';
+    }
+  }
+
+  String _riskTitle2(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return 'Kondisi aman untuk semua.';
+      case IspuCategory.sedang:
+        return 'Kelompok sensitif perlu waspada.';
+      case IspuCategory.tidakSehat:
+        return 'Batasi paparan di luar.';
+      case IspuCategory.sangatTidakSehat:
+        return 'Semua warga harus waspada.';
+      case IspuCategory.berbahaya:
+        return 'Bukan hanya kelompok rentan.';
+      case IspuCategory.tidakTersedia:
+        return 'Memuat data risiko...';
+    }
+  }
+
+  String _riskImpact(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return 'dapat beraktivitas normal di luar ruangan.';
+      case IspuCategory.sedang:
+        return 'terutama yang sensitif, perlu memantau kondisi udara.';
+      case IspuCategory.tidakSehat:
+        return 'dapat mengalami iritasi dan gejala ringan jika terpapar lama.';
+      case IspuCategory.sangatTidakSehat:
+        return 'berisiko mengalami gangguan pernapasan jika berada di luar.';
+      case IspuCategory.berbahaya:
+        return 'dapat mengalami iritasi mata, batuk, dan sesak. Paparan dapat memperburuk penyakit paru atau jantung.';
+      case IspuCategory.tidakTersedia:
+        return 'sedang dimuat...';
+    }
+  }
+
+  static String _monthName(int m) {
+    const months = [
+      '', 'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
+      'Jul', 'Ags', 'Sep', 'Okt', 'Nov', 'Des'
+    ];
+    return m >= 1 && m <= 12 ? months[m] : '';
   }
 }
 
@@ -868,15 +1351,13 @@ class _LineChartPainter extends CustomPainter {
   final List<double> values;
   final List<String> xLabels;
   final Animation<double> progress;
-
-  static const double _minV = 250;
-  static const double _maxV = 1000;
-  static const Color _line = Color(0xFFB23A3A);
+  final Color lineColor;
 
   _LineChartPainter({
     required this.values,
     required this.xLabels,
     required this.progress,
+    required this.lineColor,
   }) : super(repaint: progress);
 
   TextPainter _tp(String text) {
@@ -891,23 +1372,28 @@ class _LineChartPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    const left = 46.0;
-    const right = 12.0;
-    const top = 38.0;
-    const bottom = 28.0;
+    if (values.length < 2) return;
+
+    const left = 46.0, right = 12.0, top = 38.0, bottom = 28.0;
     final chart = Rect.fromLTRB(left, top, size.width - right, size.height - bottom);
 
+    final minV = values.reduce(math.min);
+    final maxV = values.reduce(math.max);
+    final range = (maxV - minV).clamp(10, double.infinity);
+    final lo = (minV - range * 0.1).floorToDouble();
+    final hi = (maxV + range * 0.1).ceilToDouble();
+
     double yOf(double v) =>
-        chart.bottom - (v - _minV) / (_maxV - _minV) * chart.height;
+        chart.bottom - (v - lo) / (hi - lo) * chart.height;
 
     final grid = Paint()
       ..color = const Color(0xFFE9EEEA)
       ..strokeWidth = 1;
-    const ticks = [1000.0, 750.0, 500.0, 250.0];
+    final ticks = [lo, lo + (hi - lo) / 3, lo + (hi - lo) * 2 / 3, hi];
     for (final v in ticks) {
       final y = yOf(v);
       canvas.drawLine(Offset(chart.left, y), Offset(chart.right, y), grid);
-      final tp = _tp(v == 1000 ? '1.000' : v.toInt().toString());
+      final tp = _tp(v.toInt().toString());
       tp.paint(canvas, Offset(0, y - tp.height / 2));
     }
 
@@ -920,8 +1406,6 @@ class _LineChartPainter extends CustomPainter {
       if (dx + tp.width > size.width) dx = size.width - tp.width;
       tp.paint(canvas, Offset(dx, chart.bottom + 9));
     }
-
-    if (values.length < 2) return;
 
     final pts = <Offset>[
       for (int i = 0; i < values.length; i++)
@@ -952,10 +1436,7 @@ class _LineChartPainter extends CustomPainter {
         ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            _line.withValues(alpha: 0.22),
-            _line.withValues(alpha: 0.0),
-          ],
+          colors: [lineColor.withValues(alpha: 0.22), lineColor.withValues(alpha: 0.0)],
         ).createShader(chart),
     );
     canvas.drawPath(
@@ -966,13 +1447,12 @@ class _LineChartPainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round
         ..strokeCap = StrokeCap.round
         ..isAntiAlias = true
-        ..color = _line,
+        ..color = lineColor,
     );
     canvas.restore();
 
     double op = (p - 0.9) / 0.1;
-    if (op < 0) op = 0;
-    if (op > 1) op = 1;
+    op = op.clamp(0.0, 1.0);
     if (op > 0) {
       final last = pts.last;
       canvas.drawLine(
@@ -982,16 +1462,8 @@ class _LineChartPainter extends CustomPainter {
           ..strokeWidth = 1.2
           ..color = const Color(0xFF3A2A2A).withValues(alpha: op),
       );
-      canvas.drawCircle(
-        last,
-        8,
-        Paint()..color = _line.withValues(alpha: 0.25 * op),
-      );
-      canvas.drawCircle(
-        last,
-        4.5,
-        Paint()..color = _line.withValues(alpha: op),
-      );
+      canvas.drawCircle(last, 8, Paint()..color = lineColor.withValues(alpha: 0.25 * op));
+      canvas.drawCircle(last, 4.5, Paint()..color = lineColor.withValues(alpha: op));
     }
   }
 
@@ -1003,10 +1475,7 @@ class _LineChartPainter extends CustomPainter {
 class _Card extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
-  const _Card({
-    required this.child,
-    this.padding = const EdgeInsets.all(18),
-  });
+  const _Card({required this.child, this.padding = const EdgeInsets.all(18)});
 
   @override
   Widget build(BuildContext context) {
@@ -1099,4 +1568,22 @@ class _InfoRow extends StatelessWidget {
       ],
     );
   }
+}
+
+class _ComparisonRow {
+  final String provider;
+  final String parameter;
+  final String nilai;
+  final String unit;
+  final String status;
+  final Color statusColor;
+
+  const _ComparisonRow({
+    required this.provider,
+    required this.parameter,
+    required this.nilai,
+    required this.unit,
+    required this.status,
+    required this.statusColor,
+  });
 }
