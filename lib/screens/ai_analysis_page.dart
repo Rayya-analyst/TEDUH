@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../models/air_quality_models.dart';
 import '../services/air_quality_repository.dart';
+import '../services/nasa_firms_provider.dart';
 import '../state/app_settings.dart';
 import '../state/monitoring_state.dart';
 import '../widgets/coach_marks.dart';
@@ -44,6 +45,8 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
   String _nowLabel = '';
   String _nowValStr = '--';
   bool _hasHistoryData = false;
+  int? _hotspotCount;
+  String _nasaKey = '';
 
   static const _bg = Color(0xFFF4F6F2);
   static const _pill = Color(0xFF1F6B4F);
@@ -69,7 +72,26 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadHistoryData();
+      _loadNasaHotspots();
     });
+  }
+
+  Future<void> _loadNasaHotspots() async {
+    final key = await NasaFirmsHotspotProvider.getEffectiveMapKey();
+    if (!mounted) return;
+    setState(() => _nasaKey = key);
+    if (key.isNotEmpty) {
+      try {
+        final spots =
+            await NasaFirmsHotspotProvider().fetchHotspotsForIndonesia(mapKey: key);
+        if (!mounted) return;
+        setState(() => _hotspotCount = spots.length);
+      } catch (_) {}
+    } else {
+      if (mounted) {
+        setState(() => _hotspotCount = null);
+      }
+    }
   }
 
   @override
@@ -1031,8 +1053,9 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
       );
     }
 
-    final nasaKey = const String.fromEnvironment('NASA_FIRMS_MAP_KEY',
-        defaultValue: '');
+    final effectiveNasaKey = _nasaKey.isNotEmpty
+        ? _nasaKey
+        : const String.fromEnvironment('NASA_FIRMS_MAP_KEY', defaultValue: '');
 
     final pm25Str = reading.pm25 != null
         ? reading.pm25!.toStringAsFixed(1)
@@ -1063,12 +1086,15 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
       _ComparisonRow(
         provider: 'NASA FIRMS',
         parameter: 'Hotspot / Titik Api',
-        nilai: '—',
+        nilai: effectiveNasaKey.isNotEmpty
+            ? (_hotspotCount != null ? '$_hotspotCount' : '...')
+            : '—',
         unit: 'titik',
-        status: nasaKey.isNotEmpty ? 'Aktif' : 'Opsional · Belum Aktif',
-        statusColor: nasaKey.isNotEmpty
+        status: effectiveNasaKey.isNotEmpty ? 'Aktif' : 'Opsional · Belum Aktif',
+        statusColor: effectiveNasaKey.isNotEmpty
             ? const Color(0xFF176D59)
             : const Color(0xFF64748B),
+        onTap: () => _showNasaConfigDialog(context),
       ),
     ];
 
@@ -1179,21 +1205,37 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
                     ),
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 7, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: row.statusColor.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                              color: row.statusColor.withValues(alpha: 0.35)),
-                        ),
-                        child: Text(
-                          row.status,
-                          style: GoogleFonts.poppins(
-                            fontSize: 8.5,
-                            fontWeight: FontWeight.w700,
-                            color: row.statusColor,
+                      child: InkWell(
+                        onTap: row.onTap,
+                        borderRadius: BorderRadius.circular(20),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: row.statusColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: row.statusColor.withValues(alpha: 0.35)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  row.status,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 8.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: row.statusColor,
+                                  ),
+                                ),
+                              ),
+                              if (row.onTap != null) ...[
+                                const SizedBox(width: 3),
+                                Icon(Icons.edit_outlined,
+                                    size: 9.5, color: row.statusColor),
+                              ],
+                            ],
                           ),
                         ),
                       ),
@@ -1204,8 +1246,101 @@ class _AiAnalysisPageState extends State<AiAnalysisPage>
           ),
           const SizedBox(height: 10),
           Text(
-            'Open-Meteo CAMS & Firestore: data ditampilkan langsung. NASA FIRMS memerlukan MAP_KEY gratis (opsional · daftar di firms.modaps.eosdis.nasa.gov). Nilai "—" = data tidak tersedia saat ini.',
+            'Open-Meteo CAMS & Firestore: data ditampilkan langsung. NASA FIRMS memerlukan MAP_KEY gratis (opsional · ketuk badge untuk mengatur atau daftar di firms.modaps.eosdis.nasa.gov). Nilai "—" = data tidak tersedia saat ini.',
             style: GoogleFonts.poppins(fontSize: 9.5, color: TC.hint),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showNasaConfigDialog(BuildContext context) {
+    final controller = TextEditingController(text: _nasaKey);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.satellite_alt_rounded,
+                color: Color(0xFF176D59), size: 22),
+            const SizedBox(width: 8),
+            Text(
+              'NASA FIRMS MAP_KEY',
+              style: GoogleFonts.poppins(
+                  fontSize: 14, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Kunci API gratis untuk deteksi titik panas satelit (VIIRS/MODIS). Dapatkan di firms.modaps.eosdis.nasa.gov/api/map_key/',
+              style: GoogleFonts.poppins(fontSize: 11, color: TC.hint),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                hintText: 'Masukkan 32 digit MAP_KEY...',
+                hintStyle: GoogleFonts.poppins(fontSize: 11, color: TC.hint),
+                filled: true,
+                fillColor: const Color(0xFFF4F6F2),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE2EBE5)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE2EBE5)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide:
+                      const BorderSide(color: Color(0xFF176D59), width: 1.5),
+                ),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              ),
+              style: GoogleFonts.poppins(fontSize: 12),
+            ),
+          ],
+        ),
+        actions: [
+          if (_nasaKey.isNotEmpty)
+            TextButton(
+              onPressed: () async {
+                await NasaFirmsHotspotProvider.saveMapKey('');
+                if (ctx.mounted) Navigator.pop(ctx);
+                _loadNasaHotspots();
+              },
+              child: Text('Hapus Kunci',
+                  style: GoogleFonts.poppins(
+                      color: Colors.red, fontSize: 12)),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Batal',
+                style: GoogleFonts.poppins(color: TC.hint, fontSize: 12)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF176D59),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () async {
+              final newKey = controller.text.trim();
+              await NasaFirmsHotspotProvider.saveMapKey(newKey);
+              if (ctx.mounted) Navigator.pop(ctx);
+              _loadNasaHotspots();
+            },
+            child: Text('Simpan',
+                style: GoogleFonts.poppins(
+                    fontSize: 12, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -1577,6 +1712,7 @@ class _ComparisonRow {
   final String unit;
   final String status;
   final Color statusColor;
+  final VoidCallback? onTap;
 
   const _ComparisonRow({
     required this.provider,
@@ -1585,5 +1721,6 @@ class _ComparisonRow {
     required this.unit,
     required this.status,
     required this.statusColor,
+    this.onTap,
   });
 }

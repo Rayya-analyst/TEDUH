@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FirmsHotspot {
   final double latitude;
@@ -70,11 +71,27 @@ class NasaFirmsHotspotProvider {
   bool get isConfigured =>
       const String.fromEnvironment('NASA_FIRMS_MAP_KEY', defaultValue: defaultMapKey).isNotEmpty;
 
+  static Future<void> saveMapKey(String key) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('nasa_firms_map_key', key.trim());
+  }
+
+  static Future<String> getEffectiveMapKey() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('nasa_firms_map_key') ?? '';
+      if (saved.isNotEmpty) return saved.trim();
+    } catch (_) {}
+    return const String.fromEnvironment('NASA_FIRMS_MAP_KEY', defaultValue: defaultMapKey);
+  }
+
   Future<List<FirmsHotspot>> fetchHotspotsForIndonesia({
     String? mapKey,
   }) async {
-    final effectiveKey = mapKey ??
-        const String.fromEnvironment('NASA_FIRMS_MAP_KEY', defaultValue: defaultMapKey);
+    String effectiveKey = mapKey ?? '';
+    if (effectiveKey.isEmpty) {
+      effectiveKey = await getEffectiveMapKey();
+    }
 
     if (effectiveKey.isEmpty) {
       _lastError =
