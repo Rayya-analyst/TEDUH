@@ -8,7 +8,7 @@ Dibuat oleh tim **ARSR** untuk **LOGICODIX 2026 Hackathon Competition**.
 
 | Tautan | Alamat |
 |---|---|
-| Unduh dan pasang APK | https://github.com/Rayya-analyst/TEDUH/releases/tag/v1.0.0 |
+| Unduh dan pasang APK | https://github.com/Rayya-analyst/TEDUH/releases/tag/v1.0.1 |
 | Video demo | https://youtu.be/ubgyHvsKrbI |
 | Akun demonstrasi | Daftar dengan akun apa saja (lihat bagian [Akun demonstrasi](#akun-demonstrasi)) |
 
