@@ -120,10 +120,44 @@ class _TeduhReadyPageState extends State<TeduhReadyPage>
             colors: [Color(0xFFE6F4EA), Color(0xFFF2F9F4)],
           ),
         ),
-        child: SafeArea(
-          child: SingleChildScrollView(
+        child: NestedScrollView(
+          physics: const BouncingScrollPhysics(),
+          headerSliverBuilder: (context, _) => [
+            SliverAppBar(
+              backgroundColor: const Color(0xFFE6F4EA),
+              elevation: 0,
+              pinned: true,
+              floating: true,
+              snap: true,
+              toolbarHeight: 64,
+              automaticallyImplyLeading: false,
+              shadowColor: Colors.black.withValues(alpha: 0.08),
+              surfaceTintColor: Colors.transparent,
+              flexibleSpace: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE6F4EA),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+                child: SafeArea(
+                  bottom: false,
+                  child: KeyedSubtree(
+                    key: _tk[0],
+                    child: _topBar(),
+                  ),
+                ),
+              ),
+            ),
+          ],
+          body: SingleChildScrollView(
             physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
             child: ListenableBuilder(
               listenable: ReadinessState.instance,
               builder: (context, _) {
@@ -131,8 +165,7 @@ class _TeduhReadyPageState extends State<TeduhReadyPage>
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _r(0.0, 0.3, KeyedSubtree(key: _tk[0], child: _topBar())),
-                    const SizedBox(height: 26),
+                    const SizedBox(height: 18),
                     _r(0.08, 0.5, KeyedSubtree(key: _tk[1], child: _hero(percent))),
                     const SizedBox(height: 22),
                     _r(
