@@ -55,7 +55,6 @@ class TeduhNav {
 
 class TeduhDrawer extends StatelessWidget {
   final HomeMenuItem current;
-  final String memberLabel;
 
   final ValueChanged<HomeMenuItem>? onItemTap;
   final VoidCallback? onLogoutTap;
@@ -63,7 +62,6 @@ class TeduhDrawer extends StatelessWidget {
   const TeduhDrawer({
     super.key,
     required this.current,
-    this.memberLabel = 'Premium Member',
     this.onItemTap,
     this.onLogoutTap,
   });
@@ -213,38 +211,6 @@ class TeduhDrawer extends StatelessWidget {
                                 ),
                               ),
                             ],
-                          ),
-                        ),
-                        SizedBox(height: 11 * d),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Padding(
-                            padding: EdgeInsets.only(left: 20.75 * d),
-                            child: Container(
-                              height: 16.25 * d,
-                              padding: EdgeInsets.only(
-                                  left: 6.75 * d, right: 7 * d),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFEEF6F1),
-                                borderRadius: BorderRadius.circular(8.2 * d),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.check_circle_outline_rounded,
-                                      size: 9.5 * d, color: _DC.green),
-                                  SizedBox(width: 3.75 * d),
-                                  Text(
-                                    memberLabel,
-                                    style: GoogleFonts.inter(
-                                      fontSize: 8 * d,
-                                      fontWeight: FontWeight.w700,
-                                      color: _DC.green,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
                           ),
                         ),
                         SizedBox(height: 17.5 * d),

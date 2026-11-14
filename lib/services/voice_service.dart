@@ -23,8 +23,11 @@ import '../screens/riwayat_notifikasi_page.dart';
 import '../screens/sumber_pemantauan_page.dart';
 import '../screens/tas_siaga_page.dart';
 import '../screens/voice_settings_page.dart';
+import '../screens/region_page.dart';
+import '../models/air_quality_models.dart';
 import '../state/app_nav.dart';
 import '../state/app_settings.dart';
+import '../state/monitoring_state.dart';
 import '../widgets/teduh_drawer.dart';
 import 'ai_bridge.dart';
 import 'context_recommendation.dart';
@@ -199,13 +202,49 @@ class VoiceService extends ChangeNotifier {
     }
   }
 
+  bool _ttsLocaleSet = false;
+
   Future<void> _initTts() async {
     if (_ttsReady) return;
     try {
       await _tts.setLanguage('id-ID');
+
+      final langs = await _tts.getLanguages as List?;
+      final bool hasId = langs == null ||
+          langs.any((l) =>
+              l.toString().toLowerCase().startsWith('id') ||
+              l.toString().toLowerCase().contains('indonesian'));
+
+      if (!hasId) {
+        debugPrint('[VoiceService] PERINGATAN: Voice bahasa Indonesia (id-ID) '
+            'tidak tersedia di perangkat ini. TTS mungkin menggunakan bahasa lain.');
+      }
+
+      try {
+        final voices = await _tts.getVoices as List?;
+        if (voices != null) {
+          final idVoices = voices.where((v) {
+            final str = v.toString().toLowerCase();
+            return str.contains('id') || str.contains('indonesian');
+          }).toList();
+          if (idVoices.isNotEmpty) {
+            final Map<String, String>? voiceMap = idVoices.first is Map<String, String>
+                ? idVoices.first as Map<String, String>
+                : null;
+            if (voiceMap != null && voiceMap['name'] != null) {
+              await _tts.setVoice({'name': voiceMap['name']!, 'locale': 'id-ID'});
+            }
+          }
+        }
+      } catch (_) {
+      }
+
       await _tts.setVolume(1.0);
       await _tts.awaitSpeakCompletion(true);
       await _tts.setPitch(1.0);
+      await _tts.setSpeechRate(0.9); 
+      _ttsLocaleSet = true;
+
       _tts.setCompletionHandler(() {
         if (state == VoiceState.speaking) _set(VoiceState.idle);
       });
@@ -218,7 +257,26 @@ class VoiceService extends ChangeNotifier {
       _ttsReady = true;
     } catch (_) {
       _ttsReady = false;
+      _ttsLocaleSet = false;
     }
+  }
+
+  String _prepareTtsText(String raw) {
+    if (raw.trim().isEmpty) return '';
+    var text = raw.trim();
+
+    text = text.replaceAll(RegExp(r'\*\*|__|[#*`_~]'), '');
+
+    text = text.replaceAll(RegExp(r'\.{2,}'), ',');
+    text = text.replaceAll(RegExp(r'\.\s+'), ', ');
+
+    text = text.replaceAll(RegExp(r'[,;]\s*,'), ',');
+    text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    if (!text.endsWith('.') && !text.endsWith('?') && !text.endsWith('!')) {
+      text = '$text.';
+    }
+    return text;
   }
 
   Future<void> speak(String text) async {
@@ -227,9 +285,15 @@ class VoiceService extends ChangeNotifier {
     await _initTts();
     try {
       await _tts.stop();
-      await _tts.setSpeechRate(AppSettings.instance.speechRate);
+      if (!_ttsLocaleSet) {
+        await _tts.setLanguage('id-ID');
+        _ttsLocaleSet = true;
+      }
+      final rate = AppSettings.instance.speechRate.clamp(0.52, 0.85);
+      await _tts.setSpeechRate(rate);
       _set(VoiceState.speaking);
-      await _tts.speak(text);
+      final prepared = _prepareTtsText(text);
+      await _tts.speak(prepared);
       if (state == VoiceState.speaking) _set(VoiceState.idle);
     } catch (_) {
       _set(VoiceState.idle);
@@ -262,6 +326,7 @@ class VoiceService extends ChangeNotifier {
             break;
           }
         }
+        _localeId ??= 'id_ID';
       }
     } catch (_) {
       _sttReady = false;
@@ -310,10 +375,13 @@ class VoiceService extends ChangeNotifier {
     try {
       await _stt.listen(
         onResult: _onResult,
-        localeId: _localeId,
-        listenFor: const Duration(seconds: 20),
-        pauseFor: const Duration(seconds: 3),
-        listenOptions: SpeechListenOptions(partialResults: true),
+        listenOptions: SpeechListenOptions(
+          partialResults: true,
+          localeId: _localeId ?? 'id_ID',
+          listenMode: ListenMode.confirmation,
+          listenFor: const Duration(seconds: 20),
+          pauseFor: const Duration(seconds: 3),
+        ),
       );
     } catch (_) {
       error = 'Tidak bisa memulai mendengarkan.';
@@ -354,10 +422,13 @@ class VoiceService extends ChangeNotifier {
           notifyListeners();
           if (r.finalResult && !c.isCompleted) c.complete(r.recognizedWords);
         },
-        localeId: _localeId,
-        listenFor: listenFor,
-        pauseFor: pauseFor,
-        listenOptions: SpeechListenOptions(partialResults: true),
+        listenOptions: SpeechListenOptions(
+          partialResults: true,
+          localeId: _localeId ?? 'id_ID',
+          listenMode: ListenMode.confirmation,
+          listenFor: listenFor,
+          pauseFor: pauseFor,
+        ),
       );
     } catch (_) {
       if (!c.isCompleted) c.complete('');
@@ -568,17 +639,10 @@ class VoiceService extends ChangeNotifier {
     }
     if (t.contains('sumber') || t.contains('satelit') || t.contains('copernicus') ||
         t.contains('sensor') || t.contains('iot')) {
-      MonitoringSource? src;
-      if (_has(t, ['satelit', 'copernicus', 'sentinel'])) {
-        src = MonitoringSource.satelit;
-      } else if (_has(t, ['iot', 'sensor', 'komunitas'])) {
-        src = MonitoringSource.iot;
-      } else if (_has(t, ['bmkg', 'klhk', 'klh', 'resmi', 'pemerintah'])) {
-        src = MonitoringSource.klhk;
-      }
-      if (src != null && _has(t, ['ganti', 'ubah', 'pakai', 'gunakan', 'pilih', 'ke '])) {
-        s.setSource(src);
-        return 'Sumber pemantauan diganti ke ${s.snapshot.sourceName}.';
+      if (_has(t, ['ganti', 'ubah', 'pakai', 'gunakan', 'pilih', 'ke '])) {
+        return 'Sumber ISPU TEDUH telah ditetapkan sebagai stasiun resmi KLHK '
+            'dan tidak dapat diubah secara manual. '
+            'Data selalu berasal dari stasiun pemantau udara resmi pemerintah.';
       }
     }
     return null;
@@ -677,12 +741,14 @@ class VoiceService extends ChangeNotifier {
       }
     } else if (_has(t, ['daftar perintah', 'perintah apa', 'bantuan suara', 'apa yang bisa'])) {
       reply = 'Kamu bisa mengucapkan: buka TEDUH NOW, buka TEDUH ACTION, '
-          'buka TEDUH READY, buka profil, buka bantuan, bacakan kondisi udara, '
+          'buka TEDUH READY, buka analisis kualitas udara, buka rekomendasi aktivitas, '
+          'tampilkan riwayat kualitas udara, mulai percakapan baru, buka profil, '
+          'buka bantuan, bacakan kondisi udara atau ISPU, '
           'apa rekomendasi untuk saya, buka checklist saya, bacakan informasi '
           'ini, ulangi panduan, atau kembali. Ketuk layar kapan saja untuk '
           'menghentikan suaraku. '
           'Kamu juga bisa bilang: perbesar teks, mode gelap, kontras tinggi, '
-          'kurangi animasi, ganti sumber ke satelit, atau tanya apa saja '
+          'kurangi animasi, atau tanya apa saja '
           'untuk dijawab Asisten AI.';
     } else if (_has(t, ['bacakan halaman', 'bacakan informasi', 'baca halaman', 'baca informasi', 'bacakan ini'])) {
       reply = pageSummary();
@@ -730,6 +796,9 @@ class VoiceService extends ChangeNotifier {
     } else if (_has(t, ['riwayat notifikasi', 'notifikasi'])) {
       _push(const RiwayatNotifikasiPage());
       reply = 'Membuka Riwayat Notifikasi.';
+    } else if (_has(t, ['riwayat kualitas udara', 'tampilkan riwayat', 'buka riwayat udara'])) {
+      _push(const AirQualityHistoryPage());
+      reply = 'Membuka Riwayat Kualitas Udara.';
     } else if (_has(t, ['riwayat'])) {
       _push(const AirQualityHistoryPage());
       reply = 'Membuka Riwayat Kualitas Udara.';
@@ -748,12 +817,33 @@ class VoiceService extends ChangeNotifier {
     } else if (_has(t, ['aksesibilitas'])) {
       _push(const AccessibilityPage());
       reply = 'Membuka Aksesibilitas.';
+    } else if (_has(t, ['analisis kualitas udara', 'buka analisis'])) {
+      _push(const AiAnalysisPage());
+      reply = 'Membuka Analisis Kualitas Udara.';
     } else if (_has(t, ['analisis'])) {
       _push(const AiAnalysisPage());
       reply = 'Membuka Analisis AI.';
+    } else if (_has(t, ['percakapan baru', 'mulai percakapan', 'chat baru', 'mulai chat'])) {
+      AiAssistantBridge.pending = null; 
+      _push(const AiAssistantPage());
+      reply = 'Membuka percakapan baru di Asisten AI TEDUH.';
     } else if (_has(t, ['asisten', 'tanya ai'])) {
       _push(const AiAssistantPage());
       reply = 'Membuka Asisten AI TEDUH.';
+    } else if (_has(t, ['ganti wilayah', 'ubah wilayah', 'pilih wilayah', 'buka wilayah', 'wilayah pemantauan', 'wilayah'])) {
+      final match = MonitoringRegion.matchFromText(raw);
+      if (match != null) {
+        MonitoringState.instance.setRegion(match);
+        reply = 'Wilayah berhasil diubah ke ${match.province}, ${match.regency}.';
+      } else {
+        _push(const RegionPage());
+        reply = 'Membuka halaman pilih wilayah. Sebutkan wilayah yang ingin kamu pantau.';
+      }
+    } else if (_has(t, ['ispu', 'kualitas udara saya', 'udara wilayah saya', 'ispu wilayah'])) {
+      reply = airSummary();
+    } else if (_has(t, ['rekomendasi aktivitas', 'buka rekomendasi'])) {
+      _push(const ContextRecommendationPage());
+      reply = 'Membuka rekomendasi aktivitas. ${recommendationSummary()}';
     } else if (t.contains('rekomendasi')) {
       _push(const ContextRecommendationPage());
       reply = 'Membuka rekomendasi untuk aktivitasmu.';
