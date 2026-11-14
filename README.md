@@ -17,7 +17,7 @@ Dibuat oleh tim **ARSR** untuk **LOGICODIX 2026 Hackathon Competition**.
 | No | Nama | Peran | GitHub |
 |---|---|---|---|
 | 1 | Azka Mayyasa Tsurayya Vashty | Ketua, Project Manager, dan AI Engineer | [Rayya-analyst](https://github.com/Rayya-analyst) |
-| 2 | Arum Puji Wahyu Intania | UI/UX Designer | [pujiarum661-create](https://github.com/pujiarum661-create) |
+| 2 | Arum Puji Wahyu Intania | Desain visual (logo dan ikon) | [pujiarum661-create](https://github.com/pujiarum661-create) |
 | 3 | Rona Qurrotu Aiini | Back End | [rnaacy-jpg](https://github.com/rnaacy-jpg) |
 | 4 | Sinta Ayu Cahya Dewi | Front End | [sintaayucahya](https://github.com/sintaayucahya) |
 
@@ -30,7 +30,7 @@ Kejadian kebakaran hutan dan lahan (karhutla) menjadi salah satu hal yang melata
 
 Di sisi lain, informasi kualitas udara yang tersedia sering kali disajikan dalam bentuk angka atau grafik yang belum tentu mudah dipahami oleh semua kalangan. Masyarakat tidak hanya membutuhkan informasi mengenai kondisi udara, tetapi juga panduan praktis tentang tindakan yang perlu dilakukan, seperti kapan sebaiknya mengurangi aktivitas di luar ruangan, bagaimana melindungi diri dari paparan asap, dan apa yang perlu dipersiapkan ketika kondisi udara memburuk. Informasi tersebut juga perlu dapat diakses oleh penyandang disabilitas dengan kebutuhan aksesibilitas yang beragam.
 
-Berangkat dari permasalahan tersebut, tim ARSR mengembangkan TEDUH (Hidup Sehat, Udara Sehat), sebuah aplikasi berbasis Android yang membantu masyarakat memahami kondisi kualitas udara dan mengambil langkah perlindungan diri. TEDUH menggabungkan pemantauan kualitas udara, rekomendasi aktivitas berdasarkan tingkat risiko, panduan kesiapsiagaan menghadapi kabut asap, serta asisten berbasis AI untuk membantu menjelaskan informasi dengan bahasa yang lebih mudah dipahami.
+Berangkat dari permasalahan tersebut, tim mengembangkan TEDUH (Hidup Sehat, Udara Sehat), sebuah aplikasi berbasis Android yang membantu masyarakat memahami kondisi kualitas udara dan mengambil langkah perlindungan diri. TEDUH menggabungkan pemantauan kualitas udara, rekomendasi aktivitas berdasarkan tingkat risiko, panduan kesiapsiagaan menghadapi kabut asap, serta asisten berbasis AI untuk membantu menjelaskan informasi dengan bahasa yang lebih mudah dipahami.
 
 TEDUH juga dirancang dengan pendekatan inklusif melalui fitur aksesibilitas, seperti kendali suara, pembacaan informasi, peringatan multisensori, dan penyesuaian tampilan berdasarkan kebutuhan pengguna. Dengan demikian, TEDUH diharapkan dapat menjadi pendamping digital yang membantu masyarakat lebih tanggap, siap, dan peduli terhadap risiko pencemaran udara, sekaligus mendukung terwujudnya kesehatan dan kesejahteraan yang inklusif.
 
@@ -68,7 +68,7 @@ TEDUH menjawab ketiga masalah itu dalam satu aplikasi, dengan tiga pilar dan sat
 - **Peringatan udara berbahaya multi-indra:** sirene singkat, penjelasan suara, getar, dan kedip layar untuk pengguna tunarungu.
 
 **Pemantauan dan tindakan**
-- Kualitas udara menurut lokasi (GPS atau pilih wilayah), peta, riwayat, dan pilihan sumber data.
+- Kualitas udara menurut lokasi (GPS atau pilih wilayah), peta, dan riwayat tren (model CAMS).
 - Titik panas (hotspot) satelit NASA FIRMS sebagai petunjuk kebakaran aktif.
 - Mode offline untuk panduan kesehatan dan kontak darurat.
 - Mesin keputusan berbasis aturan ISPU (Permen LHK No. 14 Tahun 2020) untuk rekomendasi aktivitas.
@@ -86,15 +86,17 @@ TEDUH menjawab ketiga masalah itu dalam satu aplikasi, dengan tiga pilar dan sat
 - **Berangkat dari tindakan, bukan angka.** Setiap data udara diterjemahkan menjadi apa yang boleh dan tidak boleh dilakukan.
 - **Inklusif sejak rancangan,** bukan fitur tambahan. Tiap jenis disabilitas mendapat penanganan berbeda, misalnya tunarungu mendapat getar dan kedip layar, dan tunawicara tidak pernah dipaksa berbicara.
 - **Keselamatan tidak diserahkan ke LLM.** Ambang risiko ditentukan mesin aturan yang deterministik. AI hanya menjelaskan dan menjawab pertanyaan, dan tetap bisa menjawab dari basis pengetahuan lokal saat layanan AI gagal atau tidak ada internet.
-- **Jujur tentang data.** Aplikasi menyebut sumber dan sifat datanya (model atau satelit), bukan mengklaimnya sebagai ISPU stasiun resmi.
+- **Jujur tentang data.** Data bawaan diberi label data contoh dan data pemodelan diberi label model; keduanya tidak diklaim sebagai ISPU stasiun resmi.
 
 ## Keterbatasan yang kami nyatakan terbuka
 
-- Data kualitas udara berasal dari **model atmosfer** (Open-Meteo/CAMS, dan opsional Google Air Quality API), bukan pengukuran stasiun resmi KLHK. Angka di aplikasi tidak boleh dianggap sebagai ISPU resmi. Karena KLHK masih belum menyediakan sumber API secara publik.
+- **Angka ISPU, suhu, dan kelembapan bawaan di beranda adalah data contoh** yang diisi tim di Cloud Firestore untuk demonstrasi. Aplikasi belum terhubung ke stasiun pemantau resmi, sehingga angka itu bukan kondisi udara sesungguhnya.
+- Grafik riwayat tren memakai **model atmosfer Open-Meteo/CAMS**, yaitu data pemodelan dan bukan ISPU resmi.
+- Bila data tidak tersedia (misalnya tanpa internet), aplikasi menampilkan perkiraan cadangan berbasis wilayah, bukan hasil pengukuran.
 - **Hotspot NASA FIRMS** adalah deteksi anomali panas oleh satelit. Itu menunjukkan kemungkinan kebakaran aktif, bukan konsentrasi PM2.5 atau ISPU.
 - Sumber "sensor komunitas IoT" **belum aktif**. Aplikasi menampilkan "data tidak tersedia", bukan data fiktif.
 - Jawaban AI bukan pengganti saran medis.
-- Diuji pada satu perangkat Android. iOS belum diuji.
+- Diuji pada satu perangkat Android (Infinix X6833B, Android 14). iOS belum diuji.
 
 ## Teknologi
 
@@ -103,7 +105,7 @@ TEDUH menjawab ketiga masalah itu dalam satu aplikasi, dengan tiga pilar dan sat
 | Aplikasi | Flutter, Dart, Material, google_fonts |
 | Akun dan data pengguna | Firebase Authentication (email dan Google), Cloud Firestore |
 | AI | Google Gemini API lewat REST (paket `http`) |
-| Data udara | Open-Meteo (model CAMS), Google Air Quality API (opsional), Cloud Firestore (`air_readings`, `stations`), NASA FIRMS (hotspot, opsional) |
+| Data udara | Cloud Firestore (`air_readings`: data contoh bawaan), Open-Meteo (model CAMS, untuk riwayat tren), NASA FIRMS (hotspot, opsional) |
 | Lokasi dan peta | geolocator, permission_handler, flutter_map, latlong2, OpenStreetMap (tile), Nominatim (geocoding balik) |
 | Aksesibilitas | speech_to_text, flutter_tts, audioplayers, getaran perangkat |
 | Penyimpanan lokal | shared_preferences |
@@ -117,9 +119,8 @@ flowchart LR
   UI --> AUTH["Firebase Auth + Firestore users/uid"]
   UI --> MON["MonitoringState"]
   MON --> REPO["AirQualityRepository"]
-  REPO --> OM["Open-Meteo CAMS"]
-  REPO --> GA["Google Air Quality API (opsional)"]
-  REPO --> FS["Firestore air_readings dan stations"]
+  REPO --> OM["Open-Meteo CAMS (riwayat tren)"]
+  REPO --> FS["Firestore air_readings (data contoh bawaan)"]
   UI --> FIRMS["NASA FIRMS hotspot (opsional)"]
   REPO --> DE["Mesin keputusan aturan ISPU (tanpa LLM)"]
   DE --> UI
@@ -177,11 +178,10 @@ cd TEDUH
 flutter pub get
 flutter run \
   --dart-define=GEMINI_API_KEY=ISI_KUNCI_ANDA \
-  --dart-define=NASA_FIRMS_MAP_KEY=ISI_KUNCI_ANDA \
-  --dart-define=GOOGLE_AIR_QUALITY_KEY=ISI_KUNCI_ANDA
+  --dart-define=NASA_FIRMS_MAP_KEY=ISI_KUNCI_ANDA
 ```
 
-Ketiga kunci bersifat **opsional**. Tanpa kunci, aplikasi tetap berjalan: AI memakai jawaban cadangan dari knowledge base, dan sumber data yang membutuhkan kunci dinonaktifkan.
+Kedua kunci bersifat **opsional**. Tanpa kunci, aplikasi tetap berjalan: AI memakai jawaban cadangan dari knowledge base, dan sumber data yang membutuhkan kunci dinonaktifkan.
 
 Konfigurasi Firebase (`android/app/google-services.json` dan `lib/firebase_options.dart`) sudah disertakan agar aplikasi dapat dibangun. Kunci Firebase client memang publik; perlindungan data ada di Firebase Authentication dan aturan keamanan Firestore.
 
@@ -193,7 +193,6 @@ Aplikasi membaca konfigurasi lewat `--dart-define`, bukan berkas `.env`. Daftar 
 |---|---|---|
 | `GEMINI_API_KEY` | Kunci Gemini API untuk Asisten AI dan Analisis AI | Tidak (ada jawaban cadangan) |
 | `NASA_FIRMS_MAP_KEY` | Kunci NASA FIRMS untuk hotspot satelit | Tidak |
-| `GOOGLE_AIR_QUALITY_KEY` | Kunci Google Air Quality API | Tidak |
 
 ### D. Menguji
 
@@ -231,7 +230,7 @@ Masuk dengan Google tersedia, tetapi bergantung pada konfigurasi sidik jari apli
 | Jenis | Sumber | Keterangan |
 |---|---|---|
 | Data udara | [Open-Meteo](https://open-meteo.com), model CAMS (Copernicus Atmosphere Monitoring Service) | Data pemodelan; atribusi sesuai ketentuan Open-Meteo |
-| Data udara | Google Air Quality API | Opsional |
+| Data ISPU bawaan | Data contoh yang diisi tim di Cloud Firestore | Untuk demonstrasi, bukan data stasiun |
 | Hotspot kebakaran | NASA FIRMS | Opsional; butuh MAP_KEY gratis |
 | Peta dan geocoding | © OpenStreetMap contributors (tile dan Nominatim) | |
 | Standar ISPU | Permen LHK No. 14 Tahun 2020 | Dasar ambang mesin keputusan |
@@ -243,7 +242,8 @@ Masuk dengan Google tersedia, tetapi bergantung pada konfigurasi sidik jari apli
 
 ## Rencana pengembangan
 
-- Menghubungkan data stasiun resmi (BMKG/KLHK) bila akses API tersedia.
+- Mengganti data contoh dengan data stasiun resmi (BMKG/KLHK) bila akses API tersedia.
+- Mengaktifkan sumber Google Air Quality API (penyedia datanya sudah ada di kode).
 - Memindahkan pemanggilan AI ke backend agar kunci API tidak berada di aplikasi.
 - Mengaktifkan sumber sensor komunitas.
 - Menambah dukungan iOS dan bahasa daerah.
