@@ -1,0 +1,511 @@
+import 'dart:convert';
+import 'dart:math' as math;
+import 'package:flutter/services.dart';
+
+enum DocStatus { draft, pendingReview, verified, published, archived }
+
+class KBDocument {
+  final String documentId;
+  final String category; 
+  final String title;
+  final String content;
+  final String source;
+  final String version;
+  final DocStatus status;
+  final String updatedAt;
+  final List<String> keywords;
+
+  const KBDocument({
+    required this.documentId,
+    required this.category,
+    required this.title,
+    required this.content,
+    required this.source,
+    required this.version,
+    this.status = DocStatus.published,
+    required this.updatedAt,
+    required this.keywords,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'document_id': documentId,
+        'category': category,
+        'title': title,
+        'content': content,
+        'source': source,
+        'version': version,
+        'status': status.name,
+        'updated_at': updatedAt,
+        'keywords': keywords,
+      };
+
+  factory KBDocument.fromJson(Map<String, dynamic> json) {
+    return KBDocument(
+      documentId: json['document_id'] ?? '',
+      category: json['category'] ?? 'umum',
+      title: json['title'] ?? '',
+      content: json['content'] ?? '',
+      source: json['source'] ?? 'Dokumentasi Resmi TEDUH',
+      version: json['version'] ?? '1.0',
+      status: DocStatus.values.firstWhere(
+        (e) => e.name == json['status'],
+        orElse: () => DocStatus.published,
+      ),
+      updatedAt: json['updated_at'] ?? '2026-11-11',
+      keywords: (json['keywords'] as List?)?.map((e) => e.toString().toLowerCase()).toList() ?? [],
+    );
+  }
+}
+
+class RetrievalResult {
+  final KBDocument document;
+  final double relevanceScore;
+  final String snippet;
+
+  const RetrievalResult({
+    required this.document,
+    required this.relevanceScore,
+    required this.snippet,
+  });
+}
+
+class TeduhKnowledgeBase {
+  TeduhKnowledgeBase._();
+  static final TeduhKnowledgeBase instance = TeduhKnowledgeBase._();
+
+  final List<KBDocument> _documents = [];
+  bool _initialized = false;
+
+  List<KBDocument> get allDocuments => List.unmodifiable(_documents);
+
+  Future<void> initialize() async {
+    if (_initialized) return;
+
+    _loadDefaultCoreDocuments();
+
+    try {
+      final jsonString = await rootBundle.loadString('assets/data/teduh_knowledge_base.json');
+      final List parsed = jsonDecode(jsonString);
+      for (final item in parsed) {
+        final doc = KBDocument.fromJson(item);
+        final idx = _documents.indexWhere((d) => d.documentId == doc.documentId);
+        if (idx >= 0) {
+          _documents[idx] = doc;
+        } else {
+          _documents.add(doc);
+        }
+      }
+    } catch (_) {
+    }
+    _initialized = true;
+  }
+
+  void addDocument(KBDocument doc) {
+    _documents.removeWhere((d) => d.documentId == doc.documentId);
+    _documents.add(doc);
+  }
+
+  bool updateDocument(KBDocument doc) {
+    final idx = _documents.indexWhere((d) => d.documentId == doc.documentId);
+    if (idx >= 0) {
+      _documents[idx] = doc;
+      return true;
+    }
+    return false;
+  }
+  bool deleteDocument(String documentId) {
+    final before = _documents.length;
+    _documents.removeWhere((d) => d.documentId == documentId);
+    return _documents.length < before;
+  }
+
+  String exportToJson() {
+    final list = _documents.map((d) => d.toJson()).toList();
+    return const JsonEncoder.withIndent('  ').convert(list);
+  }
+
+  void importFromJson(String jsonString) {
+    final List parsed = jsonDecode(jsonString);
+    _documents.clear();
+    for (final item in parsed) {
+      _documents.add(KBDocument.fromJson(item));
+    }
+  }
+
+  List<RetrievalResult> retrieve({
+    required String query,
+    int maxResults = 3,
+    double threshold = 0.15,
+  }) {
+    if (_documents.isEmpty) _loadDefaultCoreDocuments();
+
+    final queryLower = query.toLowerCase();
+    final rawTokens = queryLower
+        .split(RegExp(r'[\s,?.!;:()"\-_]+'))
+        .where((t) => t.length > 1 && !_stopWords.contains(t))
+        .toList();
+
+    if (rawTokens.isEmpty && queryLower.trim().isNotEmpty) {
+      final fallbackTokens = queryLower.split(RegExp(r'[\s,?.!]+')).where((t) => t.length > 2).toList();
+      rawTokens.addAll(fallbackTokens);
+    }
+
+    if (rawTokens.isEmpty) return [];
+
+    final results = <RetrievalResult>[];
+
+    for (final doc in _documents) {
+      if (doc.status != DocStatus.verified && doc.status != DocStatus.published) {
+        continue;
+      }
+
+      double score = 0.0;
+      final titleLower = doc.title.toLowerCase();
+      final contentLower = doc.content.toLowerCase();
+
+      for (final t in rawTokens) {
+        if (titleLower.contains(t)) score += 3.5;
+      }
+
+      for (final kw in doc.keywords) {
+        if (queryLower.contains(kw)) {
+          score += 4.0;
+        } else {
+          final kwParts = kw.split(' ');
+          for (final kp in kwParts) {
+            if (kp.length > 2 && rawTokens.contains(kp)) {
+              score += 1.8;
+            }
+          }
+        }
+      }
+
+      for (final t in rawTokens) {
+        if (contentLower.contains(t)) score += 0.8;
+      }
+      final effectiveLength = math.max(1, math.min(rawTokens.length, 4));
+      final normalizedScore = score / (effectiveLength * 3.5);
+
+      if (normalizedScore >= threshold || score >= 2.5) {
+        String snippet = doc.content;
+        if (snippet.length > 280) {
+          snippet = '${snippet.substring(0, 280)}...';
+        }
+        results.add(RetrievalResult(
+          document: doc,
+          relevanceScore: normalizedScore,
+          snippet: snippet,
+        ));
+      }
+    }
+
+    results.sort((a, b) => b.relevanceScore.compareTo(a.relevanceScore));
+    return results.take(maxResults).toList();
+  }
+
+  static const Set<String> _stopWords = {
+    'yang', 'untuk', 'pada', 'ke', 'di', 'dari', 'ini', 'itu', 'dengan',
+    'adalah', 'dan', 'atau', 'saya', 'kamu', 'apa', 'bagaimana', 'kenapa',
+    'mengapa', 'apakah', 'bisa', 'tolong', 'mohon', 'ada', 'tidak', 'lagi',
+    'sudah', 'halo', 'hai', 'selamat', 'pagi', 'siang', 'sore', 'malam',
+    'dong', 'kah', 'saja', 'terima', 'kasih', 'makasih', 'tentang', 'terhadap',
+    'seperti', 'ingin', 'tanya', 'tahu', 'mau', 'boleh'
+  };
+
+  void _loadDefaultCoreDocuments() {
+    _documents.clear();
+    _documents.addAll([
+      const KBDocument(
+        documentId: 'TEDUH-IDENTITAS-01',
+        category: 'identitas',
+        title: 'Identitas dan Tujuan Aplikasi TEDUH',
+        content: 'TEDUH adalah aplikasi pendamping perlindungan kesehatan lingkungan yang membantu masyarakat memahami kondisi udara, menentukan tindakan yang tepat, dan mengakses informasi kesehatan lingkungan tanpa terkecuali. TEDUH bukan sekadar pemantau polusi, melainkan asisten perlindungan yang adaptif dan inklusif bagi seluruh lapisan masyarakat, khususnya kelompok rentan seperti penderita asma, anak-anak, lansia, dan ibu hamil.',
+        source: 'Dokumentasi Resmi TEDUH v1.0',
+        version: '1.0',
+        updatedAt: '2026-11-11',
+        keywords: ['apa itu teduh', 'definisi teduh', 'identitas', 'tujuan', 'visi', 'misi', 'teduh'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-FITUR-NOW-01',
+        category: 'fitur',
+        title: 'Fitur TEDUH NOW — Pemantauan Real-time',
+        content: 'TEDUH NOW menampilkan informasi kualitas udara secara langsung dari stasiun pemantau resmi (KLHK). Informasi yang disediakan meliputi Indeks Standar Pencemar Udara (ISPU), konsentrasi partikulat halus PM2.5 (µg/m³), kategori kualitas udara (Baik, Sedang, Tidak Sehat, Sangat Tidak Sehat, Berbahaya), serta grafik tren perubahan kualitas udara.',
+        source: 'Dokumentasi Fitur TEDUH NOW v1.0',
+        version: '1.0',
+        updatedAt: '2026-11-11',
+        keywords: ['teduh now', 'now', 'ispu', 'pm25', 'pemantauan', 'stasiun', 'klhk', 'beranda'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-FITUR-ACTION-01',
+        category: 'fitur',
+        title: 'Fitur TEDUH ACTION — Rekomendasi Tindakan Personal',
+        content: 'TEDUH ACTION adalah sistem Context-Aware Action Recommendation yang memberikan rekomendasi tindakan perlindungan kesehatan spesifik berdasarkan kondisi udara terkini dan aktivitas yang dipilih pengguna (bersepeda, berlari, bekerja luar ruangan, sekolah, dll.). Rekomendasi mencakup prioritas tindakan, alasan medis sederhana, dan alternatif aktivitas yang aman.',
+        source: 'Dokumentasi Fitur TEDUH ACTION v1.0',
+        version: '1.0',
+        updatedAt: '2026-11-11',
+        keywords: ['teduh action', 'action', 'rekomendasi', 'aktivitas', 'olahraga', 'bersepeda', 'bekerja'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-FITUR-READY-01',
+        category: 'fitur',
+        title: 'Fitur TEDUH READY — Kesiapsiagaan & Tas Siaga',
+        content: 'TEDUH READY menyediakan checklist terverifikasi untuk kesiapsiagaan bencana kabut asap dan polusi ekstrem. Berisi daftar barang Tas Siaga Bencana: masker respirator N95/KN95, obat pribadi & inhaler, obat tetes mata steril, kacamata pelindung (goggles), air minum bersih, dokumen penting kedap air, serta nomor kontak darurat resmi posko Karhutla (BPBD 117, PSC 119, Damkar 113).',
+        source: 'Dokumentasi Kesiapsiagaan TEDUH READY v1.0',
+        version: '1.0',
+        updatedAt: '2026-11-11',
+        keywords: ['teduh ready', 'ready', 'tas siaga', 'checklist', 'evakuasi', 'kesiapsiagaan', 'inhaler', 'kontak darurat', 'bpbd'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-FITUR-OFFLINE-01',
+        category: 'fitur',
+        title: 'Fitur Mode Offline & Unduhan Wilayah Kalimantan',
+        content: 'TEDUH menyediakan Fitur Mode Offline agar masyarakat di daerah pedalaman atau yang kehilangan sinyal seluler saat bencana tetap dapat mengakses data kualitas udara terakhir, panduan kesiapsiagaan, dan basis pengetahuan kesehatan. Pengguna dapat mengunduh paket data untuk 5 provinsi: Kalimantan Barat, Kalimantan Tengah, Kalimantan Selatan, Kalimantan Timur, dan Kalimantan Utara.',
+        source: 'Panduan Fitur Offline TEDUH v1.0',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['mode offline', 'unduh data', 'offline', 'tanpa internet', 'paket wilayah', 'kalimantan', 'kelola unduhan'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-FITUR-AKSES-01',
+        category: 'fitur',
+        title: 'Fitur Aksesibilitas Inklusif & Navigasi Suara',
+        content: 'TEDUH mendukung aksesibilitas penuh: Mode Bahasa Sederhana (istilah medis dan angka rumit disederhanakan), pembaca layar (TalkBack/Screen Reader dengan Semantic Labels), pembacaan suara otomatis (Text-to-Speech bahasa Indonesia id-ID), kontras tinggi, penyesuaian ukuran teks, dan panduan suara ramah pengguna.',
+        source: 'Panduan Aksesibilitas TEDUH v1.0',
+        version: '1.0',
+        updatedAt: '2026-11-11',
+        keywords: ['aksesibilitas', 'bahasa sederhana', 'talkback', 'screen reader', 'suara', 'tts', 'kontras'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-MEDIS-MASKER-01',
+        category: 'keselamatan',
+        title: 'Standar Masker untuk Asap dan PM2.5',
+        content: 'Partikel asap kebakaran hutan didominasi partikulat halus PM2.5 yang berukuran lebih kecil dari 2.5 mikrometer. Masker kain atau masker bedah biasa TIDAK MAMPU menyaring PM2.5 secara efektif karena pori-pori terlalu besar dan memiliki celah samping. Gunakan respirator bersertifikasi N95, KN95, atau KF94 yang terpasang rapat (tight seal) tanpa celah di hidung dan pipi.',
+        source: 'WHO & Kemenkes RI Guidelines on Air Pollution',
+        version: '1.0',
+        updatedAt: '2026-11-11',
+        keywords: ['masker', 'n95', 'kn95', 'kf94', 'masker kain', 'masker bedah', 'partikel', 'asap', 'respirator'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-MEDIS-RUANGAMAN-01',
+        category: 'keselamatan',
+        title: 'Cara Membuat Ruang Bersih Aman (Clean Room) di Rumah',
+        content: 'Saat ISPU memasuki kategori Tidak Sehat atau Berbahaya: 1) Pilih ruangan paling dalam tanpa ventilasi langsung ke luar. 2) Tutup rapat seluruh pintu dan jendela. 3) Sumbat celah bawah pintu dengan handuk atau kain basah. 4) Bila memakai AC, nyalakan mode sirkulasi dalam (recirculation). 5) Gunakan air purifier dengan filter HEPA jika ada. 6) Jangan menyalakan kompor gas, rokok, lilin, atau obat nyamuk bakar di dalam ruangan.',
+        source: 'CDC & KLHK Safe Clean Air Shelters Guide',
+        version: '1.0',
+        updatedAt: '2026-11-11',
+        keywords: ['ruang aman', 'ruangan bersih', 'clean room', 'tanpa penyaring', 'hepa', 'ac', 'handuk basah', 'filter'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-MEDIS-IGD-01',
+        category: 'keselamatan',
+        title: 'Gejala Darurat Bahaya Pernapasan (Segera ke IGD)',
+        content: 'Segera bawa ke Instalasi Gawat Darurat (IGD) jika muncul gejala: sulit bernapas, napas cepat tersengal-sengal, suara mengi/bengek yang tidak reda dengan inhaler, bibir atau kuku kebiruan/pucat (sianosis), nyeri dada seperti tertindih, atau penurunan kesadaran/sangat lemas. Jangan menunda penanganan medis darurat!',
+        source: 'Standar Kegawatdaruratan Respirasi Kemenkes RI',
+        version: '1.0',
+        updatedAt: '2026-11-11',
+        keywords: ['igd', 'darurat', 'sesak napas', 'mengi', 'bibir biru', 'nyeri dada', 'rumah sakit', 'gawat darurat', 'sianosis'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-UDARA-ISPU-01',
+        category: 'kualitas_udara',
+        title: 'Kategori dan Rentang Angka ISPU Resmi Permen LHK 14/2020',
+        content: 'Rentang nilai Indeks Standar Pencemar Udara (ISPU): 0-50: Baik (Hijau, udara sehat untuk seluruh aktivitas). 51-100: Sedang (Kuning, dapat diterima manusia dan hewan). 101-200: Tidak Sehat (Oranye, kelompok rentan batasi aktivitas luar). 201-300: Sangat Tidak Sehat (Merah, seluruh masyarakat hindari aktivitas luar ruangan). Lebih dari 300: Berbahaya (Merah Tua/Hitam, hindari seluruh aktivitas luar, tetap di ruang aman).',
+        source: 'Permen LHK No. P.14/MENLHK/SETJEN/KUM.1/7/2020',
+        version: '1.0',
+        updatedAt: '2026-11-11',
+        keywords: ['ispu', 'kategori ispu', 'angka aqi', 'arti angka', 'hijau', 'kuning', 'oranye', 'merah', 'berbahaya', 'baik', 'sedang', 'tidak sehat'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-FAQ-01',
+        category: 'faq',
+        title: 'Apakah Rekomendasi TEDUH Menggantikan Dokter?',
+        content: 'Tidak. TEDUH memberikan informasi dan rekomendasi perlindungan kesehatan lingkungan preventif berdasarkan pedoman kesehatan resmi, bukan diagnosis medis atau pengganti pengobatan dokter. Jika memiliki riwayat penyakit kronis atau gejala memburuk, selalu konsultasikan dengan dokter profesional.',
+        source: 'Disclaimer Resmi TEDUH v1.0',
+        version: '1.0',
+        updatedAt: '2026-11-11',
+        keywords: ['diagnosis', 'dokter', 'medis', 'rekomendasi medis', 'konsultasi', 'faq'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-KARHUTLA-PENYEBAB-01',
+        category: 'karhutla',
+        title: 'Penyebab Kebakaran Hutan dan Lahan (Karhutla)',
+        content: 'Kebakaran hutan dan lahan di Kalimantan dipicu oleh kombinasi faktor manusia dan iklim. Faktor utamanya adalah pembukaan lahan perkebunan atau pertanian dengan cara membakar karena murah dan cepat, pembuatan saluran atau kanal drainase yang mengeringkan lahan gambut basah alami, kemarau panjang akibat anomali iklim El Nino, serta kelalaian membuang puntung rokok atau sisa api unggun.',
+        source: 'Pusat Riset Kebencanaan & Konservasi Gambut',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['karhutla', 'kebakaran hutan', 'lahan gambut', 'penyebab karhutla', 'el nino', 'kanal drainase', 'bakar lahan', 'faktor karhutla'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-KARHUTLA-MEKANISME-01',
+        category: 'karhutla',
+        title: 'Mekanisme Perambatan Api Gambut Bawah Tanah (Smoldering)',
+        content: 'Pada lahan gambut, kebakaran tidak hanya terjadi di permukaan melainkan merambat di bawah tanah tanpa lidah api terbuka (smoldering combustion). Api lambat ini membakar sisa tumbuhan dan bahan organik gambut hingga kedalaman beberapa meter. Karena pasokan oksigen terbatas, pembakarannya tidak sempurna sehingga menghasilkan volume asap pekat dan emisi gas CO serta PM2.5 yang sangat tinggi dan sulit dipadamkan meski diguyur hujan rintik.',
+        source: 'Badan Restorasi Gambut dan Mangrove (BRGM)',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['api bawah tanah', 'smoldering', 'perambatan api', 'gambut kering', 'kebakaran bawah tanah', 'asap pekat', 'mekanisme api'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-KARHUTLA-DETEKSI-01',
+        category: 'karhutla',
+        title: 'Deteksi Dini Hotspot dan Titik Panas Satelit',
+        content: 'Deteksi dini kebakaran menggunakan sensor termal satelit: MODIS (Satelit Terra/Aqua) dan VIIRS (Satelit Suomi-NPP dan NOAA-20) dengan resolusi spasial 375 meter. Titik panas (hotspot) diidentifikasi berdasarkan anomali suhu radiasi inframerah termal permukaan bumi. Tingkat kepercayaan (confidence level) di atas 80% mengindikasikan kemungkinan kuat kebakaran lahan aktif di lokasi koordinat tersebut.',
+        source: 'LAPAN / BRIN & BMKG Pemantauan Hotspot',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['hotspot', 'titik panas', 'deteksi dini', 'satelit modis', 'viirs', 'terra aqua', 'suomi npp', 'brin', 'sensor satelit'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-KARHUTLA-MITIGASI-01',
+        category: 'karhutla',
+        title: 'Pencegahan dan Mitigasi: 3R Restorasi Gambut & Sekat Kanal',
+        content: 'Mitigasi Karhutla jangka panjang berpusat pada 3R Restorasi Gambut BRGM: 1) Rewetting (pembasahan kembali lahan gambut dengan pembuatan sekat kanal atau canal blocking agar muka air tanah tetap terjaga di atas -0.4 meter). 2) Revegetation (penanaman kembali vegetasi asli rawa gambut seperti jelutung rawa dan belangeran). 3) Revitalization (pemberdayaan ekonomi masyarakat desa peduli api tanpa membakar).',
+        source: 'Badan Restorasi Gambut dan Mangrove (BRGM) & KLHK',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['mitigasi', 'sekat kanal', 'canal blocking', 'rewetting', 'revegetation', 'revitalization', 'restorasi gambut', 'pencegahan karhutla'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-KARHUTLA-PENANGANAN-01',
+        category: 'karhutla',
+        title: 'Penanganan Pemadaman: Manggala Agni, Suntik Gambut, & TMC',
+        content: 'Penanganan aktif kebakaran hutan dan lahan meliputi: 1) Pemadaman darat oleh Satgas Manggala Agni KLHK dan Masyarakat Peduli Api (MPA) menggunakan nozzle suntik gambut (peat fire injection nozzle) bertekanan tinggi untuk menjangkau api bawah tanah. 2) Water bombing helikopter BNPB untuk area terisolasi. 3) Operasi Teknologi Modifikasi Cuaca (TMC) oleh BMKG dan BRIN untuk menabur garam NaCL di awan potensial guna memicu hujan buatan.',
+        source: 'KLHK, BNPB, & Satgas Pengendalian Karhutla',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['penanganan karhutla', 'manggala agni', 'suntik gambut', 'water bombing', 'tmc', 'hujan buatan', 'pemadaman api', 'helikopter'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-KARHUTLA-DAMPAK-01',
+        category: 'karhutla',
+        title: 'Dampak Jangka Pendek dan Panjang Karhutla',
+        content: 'Dampak jangka pendek: kabut asap pekat berbahaya, krisis ISPA, gangguan penglihatan, penutupan sekolah, dan penundaan penerbangan. Dampak jangka panjang: hilangnya keanekaragaman hayati dan habitat satwa endemik, degradasi lahan gambut menjadi hidrofobik, penurunan muka tanah (subsidence) hingga beberapa puluh sentimeter, kerentanan banjir tahunan saat musim hujan, dan pelepasan jutaan ton emisi karbon ke atmosfer global.',
+        source: 'Pusat Riset Perubahan Iklim & Kebencanaan',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['dampak karhutla', 'dampak jangka panjang', 'dampak jangka pendek', 'kerugian', 'subsidence', 'tutupan hutan'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-KESEHATAN-POLUTAN-01',
+        category: 'kesehatan',
+        title: 'Dampak Polutan PM2.5, PM10, CO, NO2, dan O3',
+        content: 'Dampak polutan spesifik: 1) PM2.5: Menembus silia bronkus hingga kantung alveoli dan peredaran darah, memicu inflamasi sistemik, penyakit jantung iskemia, dan serangan asma. 2) PM10: Mengiritasi saluran pernapasan atas, memicu batuk dan radang tenggorokan. 3) CO (Karbon Monoksida): Mengikat hemoglobin 200 kali lebih kuat dari oksigen, memicu hipoksia jaringan, pusing, lemas, dan mual. 4) NO2 & O3: Gas oksidan kuat yang merusak epitel mukosa paru dan memperparah bronkitis.',
+        source: 'Kementerian Kesehatan RI & WHO Air Quality Guidelines',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['pm25', 'pm10', 'co', 'no2', 'o3', 'ispa', 'dampak polutan', 'karbon monoksida', 'alveoli', 'hipoksia'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-KESEHATAN-ISPA-01',
+        category: 'kesehatan',
+        title: 'ISPA dan Gangguan Saluran Pernapasan Akibat Kabut Asap',
+        content: 'Infeksi Saluran Pernapasan Akut (ISPA) melonjak tajam selama musim Karhutla akibat iritasi partikulat kimiawi beracun pada mukosa pernapasan. Partikel asap merusak silia pembersih saluran napas sehingga bakteri dan virus mudah menginfeksi. Gejalanya meliputi batuk kering atau berdahak, pilek, sakit tenggorokan, suara serak, demam ringan, dan dada sesak.',
+        source: 'Dinas Kesehatan & Perhimpunan Dokter Paru Indonesia (PDPI)',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['ispa', 'gangguan pernapasan', 'batuk', 'saluran napas', 'paru-paru', 'infeksi', 'mukosa'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-KESEHATAN-RENTAN-01',
+        category: 'kesehatan',
+        title: 'Kerentanan Khusus: Balita, Lansia, Ibu Hamil, dan Penderita Asma',
+        content: 'Kelompok rentan menghadapi risiko komplikasi jauh lebih tinggi: 1) Balita dan anak-anak: Laju pernapasan lebih cepat dan menghirup volume udara per berat badan lebih banyak; sistem kekebalan paru belum sempurna. 2) Lansia: Risiko gagal jantung kongestif dan serangan PPOK eksaserbasi. 3) Ibu hamil: Risiko hipoksia janin, kelahiran prematur, dan Bayi Berat Lahir Rendah (BBLR). 4) Penderita asma: Rentan mengalami bronkospasme akut.',
+        source: 'Ikatan Dokter Anak Indonesia (IDAI) & PDPI',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['kelompok rentan', 'balita', 'anak', 'lansia', 'ibu hamil', 'asma', 'bblr', 'prematur', 'bronkospasme'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-KESEHATAN-GEJALA-01',
+        category: 'kesehatan',
+        title: 'Gejala Paparan Asap dan Pertolongan Pertama',
+        content: 'Gejala umum paparan asap meliputi mata merah, perih, dan berair; hidung tersumbat atau meler; tenggorokan gatal dan kering; batuk; sakit kepala; dan sesak napas ringan. Pertolongan pertama: 1) Segera masuk ke dalam ruangan bersih. 2) Bilas mata dengan obat tetes mata steril (artificial tears). 3) Minum air putih hangat dalam jumlah cukup untuk membantu mengencerkan lendir saluran napas. 4) Gunakan inhaler jika Anda memiliki riwayat asma.',
+        source: 'Kemenkes RI Panduan Tanggap Asap',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['gejala paparan asap', 'mata perih', 'batuk', 'tenggorokan gatal', 'pertolongan pertama', 'obat tetes mata'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-EKOSISTEM-FLORAFAUNA-01',
+        category: 'ekosistem',
+        title: 'Dampak Karhutla terhadap Biodiversitas, Flora, dan Fauna',
+        content: 'Karhutla memusnahkan habitat satwa endemik Kalimantan yang dilindungi: Orangutan Kalimantan (Pongo pygmaeus) menderita malnutrisi dan ISPA, Bekantan (Nasalis larvatus) kehilangan pepohonan pakan tepi sungai, serta Burung Enggang kehilangan lubang pohon sarang. Spesies flora kayu berharga khas rawa gambut seperti Ramin (Gonystylus bancanus) dan Jelutung Rawa mengalami kematian massal dan penurunan populasi kritis.',
+        source: 'BKSDA & WWF Indonesia',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['ekosistem', 'orangutan', 'bekantan', 'burung enggang', 'flora fauna', 'biodiversitas', 'ramin', 'jelutung', 'satwa liar'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-EKOSISTEM-HABITAT-01',
+        category: 'ekosistem',
+        title: 'Kerusakan Habitat, Fragmentasi, dan Konflik Satwa Liar',
+        content: 'Kebakaran memecah-belah kanopi hutan tropis menjadi petak-petak terisolasi (fragmentasi habitat). Satwa liar yang terdesak api dan kehilangan sumber makanan terpaksa keluar dari kawasan konservasi menuju kebun dan pemukiman warga, memicu peningkatan konflik manusia dan satwa seperti orangutan atau beruang madu yang masuk desa.',
+        source: 'Balai Konservasi Sumber Daya Alam (BKSDA)',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['kerusakan habitat', 'fragmentasi habitat', 'konflik satwa', 'pemukiman', 'satwa terancam'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-EKOSISTEM-GAMBUT-01',
+        category: 'ekosistem',
+        title: 'Ekosistem Kubah Gambut Tropis dan Cadangan Hidrologis',
+        content: 'Lahan rawa gambut tropis terbentuk selama ribuan tahun dari timbunan sisa tumbuhan basah di kubah gambut (peat dome). Ekosistem gambut bertindak sebagai spons air alami raksasa yang menyerap kelebihan air saat musim hujan untuk mencegah banjir, serta perlahan melepaskannya saat musim kemarau. Ketika kubah gambut didrainase dan terbakar, kapasitas hidrologis penyimpan air ini hancur total.',
+        source: 'Center for International Forestry Research (CIFOR) & BRGM',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['kubah gambut', 'peat dome', 'ekosistem gambut', 'hidrologi', 'spons air', 'rawa gambut'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-EKOSISTEM-KARBON-01',
+        category: 'ekosistem',
+        title: 'Siklus Karbon: Lahan Gambut sebagai Carbon Sink vs Carbon Source',
+        content: 'Lahan gambut tropis Kalimantan menyimpan cadangan karbon daratan terpadat di bumi (10-20 kali lipat hutan mineral biasa). Dalam kondisi alami, gambut adalah penyerap karbon (carbon sink). Namun kebakaran mengubahnya secara drastis menjadi sumber emisi karbon raksasa (carbon source), melepaskan jutaan ton CO2 dan gas metana (CH4) ke atmosfer dalam hitungan minggu.',
+        source: 'CIFOR & Panel Ahli Karbon Global',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['karbon', 'emisi karbon', 'carbon sink', 'carbon source', 'siklus karbon', 'metana', 'co2', 'pelepasan karbon'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-EKOSISTEM-TANAH-01',
+        category: 'ekosistem',
+        title: 'Kerusakan Tanah Gambut Hidrofobik dan Penurunan Kualitas Air',
+        content: 'Suhu ekstrem akibat kebakaran menyebabkan struktur organik tanah gambut mengalami fenomena hidrofobik (menolak air), sehingga tanah tidak lagi mampu menyerap air hujan dan menjadi kering permanen. Selain itu, abu alkali dan jelaga Karhutla terbawa aliran limpasan ke sungai dan danau rawa, menyebabkan pencemaran air, penurunan drastis kadar oksigen terlarut (DO), dan kematian ikan lokal.',
+        source: 'Pusat Riset Sumber Daya Lingkungan & Tanah Gambut',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['tanah hidrofobik', 'kualitas air', 'kerusakan tanah', 'pencemaran air', 'air asam', 'oksigen terlarut'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-IKLIM-ATMOSFER-01',
+        category: 'iklim',
+        title: 'Hubungan Karhutla, Perubahan Iklim, dan Umpan Balik Negatif',
+        content: 'Kebakaran hutan menciptakan lingkaran umpan balik iklim negatif (climate feedback loop): pemanasan global memperpanjang musim kemarau di Kalimantan, kekeringan memicu karhutla hebat, dan pelepasan gas rumah kaca dari karhutla kembali mempercepat laju pemanasan global. Aerosol jelaga karbon hitam (black carbon) yang melayang di atmosfer juga menyerap panas matahari dan mengganggu pembentukan awan hujan.',
+        source: 'BMKG & Intergovernmental Panel on Climate Change (IPCC)',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['perubahan iklim', 'pemanasan global', 'climate feedback loop', 'black carbon', 'gas rumah kaca', 'atmosfer'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-IKLIM-HAZE-01',
+        category: 'iklim',
+        title: 'Asap Lintas Batas (Transboundary Haze) dan Dampak Regional',
+        content: 'Aerosol kabut asap pekat dari kebakaran gambut di Kalimantan dapat terdorong oleh angin muson tenggara melintasi batas negara menuju wilayah Malaysia, Singapura, dan Brunei Darussalam (transboundary haze). Fenomena ini menurunkan intensitas sinar matahari yang mencapai tanah (solar dimming), menghambat fotosintesis tanaman, melumpuhkan sektor penerbangan komersial, dan memicu isu diplomasi lingkungan di tingkat ASEAN.',
+        source: 'ASEAN Specialised Meteorological Centre (ASMC) & BMKG',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['transboundary haze', 'asap lintas batas', 'asmc', 'malaysia', 'singapura', 'solar dimming', 'kabut asap regional'],
+      ),
+      const KBDocument(
+        documentId: 'TEDUH-IKLIM-ELNINO-01',
+        category: 'iklim',
+        title: 'Fenomena Iklim El Nino, IOD Positif, dan Hubungannya dengan Karhutla',
+        content: 'Kombinasi fenomena iklim El Nino (pemanasan suhu muka laut di Samudra Pasifik timur) dan Indian Ocean Dipole (IOD) fase positif mengalihkan awan konvektif menjauhi Indonesia. Akibatnya, curah hujan di Kalimantan anjlok drastis dan musim kemarau menjadi jauh lebih panjang dan terik. Pada periode El Nino kuat (seperti tahun 1997, 2015, dan 2019), intensitas Karhutla mencapai tingkat katastrofik.',
+        source: 'BMKG Bidang Klimatologi',
+        version: '1.0',
+        updatedAt: '2026-11-12',
+        keywords: ['el nino', 'iod', 'indian ocean dipole', 'kemarau ekstrem', 'fenomena iklim', 'iklim kalimantan', 'anomali cuaca'],
+      ),
+    ]);
+  }
+}
+

@@ -220,37 +220,6 @@ class _ContextRecommendationPageState extends State<ContextRecommendationPage> {
                       style: GoogleFonts.poppins(
                           fontSize: 12, height: 1.6, color: TC.dark),
                     ),
-                    const SizedBox(height: 6),
-                    InkWell(
-                      borderRadius: BorderRadius.circular(10),
-                      onTap: () => AppSettings.instance.update(
-                          () => AppSettings.instance.simpleLanguage =
-                              !AppSettings.instance.simpleLanguage),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                AppSettings.instance.disabilityMode
-                                    ? 'Bahasa sederhana (aktif lewat Mode Disabilitas)'
-                                    : 'Tampilkan dengan bahasa sederhana',
-                                style: GoogleFonts.poppins(
-                                    fontSize: 11, color: TC.dark),
-                              ),
-                            ),
-                            Switch(
-                              value: simple,
-                              activeThumbColor: TC.greenDeep,
-                              onChanged: AppSettings.instance.disabilityMode
-                                  ? null
-                                  : (v) => AppSettings.instance.update(() =>
-                                      AppSettings.instance.simpleLanguage = v),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
                   ],
                 ))),
                 const SizedBox(height: 14),

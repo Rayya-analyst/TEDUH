@@ -3,6 +3,7 @@ import '../widgets/voice_scope.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../state/app_settings.dart';
 import '../widgets/teduh_common.dart';
 import 'indoor_activity_pages.dart';
 import 'outdoor_activity_pages.dart';
@@ -519,7 +520,7 @@ class _RecommendationViewState extends State<_RecommendationView>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'KALIMANTAN TENGAH',
+                      AppSettings.instance.locationName.toUpperCase(),
                       style: GoogleFonts.poppins(
                         fontSize: 10.5,
                         fontWeight: FontWeight.w700,
@@ -528,7 +529,7 @@ class _RecommendationViewState extends State<_RecommendationView>
                       ),
                     ),
                     Text(
-                      'Jekan Raya, Palangka Raya',
+                      AppSettings.instance.locationName,
                       style: GoogleFonts.poppins(fontSize: 11.5, color: TC.dark),
                     ),
                   ],
