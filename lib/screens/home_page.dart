@@ -3,32 +3,114 @@ import '../widgets/coach_marks.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../models/air_quality_models.dart';
+import '../state/monitoring_state.dart';
+import 'ai_assistant_page.dart';
+import 'context_recommendation_page.dart';
 import 'detail_artikel_page.dart';
 import 'mode_offline_page.dart';
 import 'peringatan_udara.dart';
 import 'map_page.dart';
+import 'region_page.dart';
 import 'sumber_pemantauan_page.dart';
 import 'air_quality_history_page.dart';
 import '../state/app_settings.dart';
+import '../services/user_profile_service.dart';
 import '../widgets/teduh_drawer.dart';
 import '../widgets/teduh_header.dart';
 import '../widgets/voice_scope.dart';
 
-class _HomeColors {
-  static const green = Color(0xFF176D59);
-  static const red = Color(0xFFE5383B);
+class AirCardTheme {
+  final Color bg;
+  final Color border;
+  final Color titleColor;
+  final Color valueColor;
+  final Color shadowColor;
+  final Color badgeBg;
+  final Color stepBg;
 
-  static const ink = Color(0xFF0F2A24);
-  static const brandGreen = Color(0xFF18705A);
+  const AirCardTheme({
+    required this.bg,
+    required this.border,
+    required this.titleColor,
+    required this.valueColor,
+    required this.shadowColor,
+    required this.badgeBg,
+    required this.stepBg,
+  });
+
+  factory AirCardTheme.fromCategory(IspuCategory cat) {
+    switch (cat) {
+      case IspuCategory.baik:
+        return const AirCardTheme(
+          bg: Color(0xFFE8F5E9),
+          border: Color(0xFF81C784),
+          titleColor: Color(0xFF1B5E20),
+          valueColor: Color(0xFF2E7D32),
+          shadowColor: Color(0x1A2E7D32),
+          badgeBg: Color(0xFF2E7D32),
+          stepBg: Color(0xFFF1F8E9),
+        );
+      case IspuCategory.sedang:
+        return const AirCardTheme(
+          bg: Color(0xFFFFFDE7),
+          border: Color(0xFFFFD54F),
+          titleColor: Color(0xFFF57F17),
+          valueColor: Color(0xFFE65100),
+          shadowColor: Color(0x1AE65100),
+          badgeBg: Color(0xFFF9A825),
+          stepBg: Color(0xFFFFFDE7),
+        );
+      case IspuCategory.tidakSehat:
+        return const AirCardTheme(
+          bg: Color(0xFFFFF3E0),
+          border: Color(0xFFFFB74D),
+          titleColor: Color(0xFFE65100),
+          valueColor: Color(0xFFD84315),
+          shadowColor: Color(0x1AD84315),
+          badgeBg: Color(0xFFEF6C00),
+          stepBg: Color(0xFFFFF8E1),
+        );
+      case IspuCategory.sangatTidakSehat:
+        return const AirCardTheme(
+          bg: Color(0xFFFFEBEE),
+          border: Color(0xFFE57373),
+          titleColor: Color(0xFFC62828),
+          valueColor: Color(0xFFB71C1C),
+          shadowColor: Color(0x1AB71C1C),
+          badgeBg: Color(0xFFC62828),
+          stepBg: Color(0xFFFFEBEE),
+        );
+      case IspuCategory.berbahaya:
+        return const AirCardTheme(
+          bg: Color(0xFFFFCDD2),
+          border: Color(0xFFEF5350),
+          titleColor: Color(0xFF8E1B1B),
+          valueColor: Color(0xFF6B0E0E),
+          shadowColor: Color(0x2B8E1B1B),
+          badgeBg: Color(0xFF8E1B1B),
+          stepBg: Color(0xFFFFF0F0),
+        );
+      case IspuCategory.tidakTersedia:
+        return const AirCardTheme(
+          bg: Color(0xFFECEFF1),
+          border: Color(0xFFCFD8DC),
+          titleColor: Color(0xFF455A64),
+          valueColor: Color(0xFF37474F),
+          shadowColor: Color(0x1A455A64),
+          badgeBg: Color(0xFF607D8B),
+          stepBg: Color(0xFFECEFF1),
+        );
+    }
+  }
+}
+
+class _HomeColors {
   static const accent = Color(0xFF2E7B67);
   static const iconGreen = Color(0xFF3A8A72);
   static const section = Color(0xFF1F4A3F);
   static const subtle = Color(0xFF9AA7A2);
-  static const alert = Color(0xFFE5484D);
   static const cardTitle = Color(0xFF1E7360);
-  static const cardBg = Color(0xFFFFE2E2);
-  static const cardLine = Color(0xFFEA5E5E);
-  static const stepBg = Color(0xFFFFF0F0);
   static const body = Color(0xFF3D4A46);
   static const statValue = Color(0xFF26352F);
   static const divider = Color(0xFFDCDDDA);
@@ -45,6 +127,7 @@ class HomePage extends StatelessWidget {
   final String location;
   final String dateText;
   final String airStatus;
+  final IspuCategory airCategory;
   final String ispuValue;
   final String ispuLabel;
   final String airDescription;
@@ -52,8 +135,6 @@ class HomePage extends StatelessWidget {
   final String temperature;
   final String humidity;
   final String sourceText;
-  final String drawerMemberLabel;
-
 
   final int? alertIspu;
   final String alertRegion;
@@ -86,6 +167,7 @@ class HomePage extends StatelessWidget {
     this.location = 'Jekan Raya, Palangka Raya',
     this.dateText = '3 Nov 2026, 12.00',
     this.airStatus = 'Berbahaya',
+    this.airCategory = IspuCategory.berbahaya,
     this.ispuValue = '275,2',
     this.ispuLabel = '462 ISPU',
     this.airDescription = 'Partikel halus akibat kabut asap',
@@ -93,9 +175,8 @@ class HomePage extends StatelessWidget {
     this.temperature = '27°C',
     this.humidity = '80%',
     this.sourceText = 'Sumber: BMKG dan KLH • 3 November 2026',
-    this.drawerMemberLabel = 'Premium Member',
-    this.alertIspu = 168,
-    this.alertRegion = 'Kalimantan Tengah',
+    this.alertIspu,
+    this.alertRegion = '',
     this.showDailyNotification = true,
     this.dailyNotificationIspu = 211,
     this.onMenuTap,
@@ -147,8 +228,8 @@ class HomePage extends StatelessWidget {
           target: _kQuick,
           title: 'Menu cepat',
           body: 'Buka Peta Udara, Riwayat kualitas udara, Mode Offline, dan '
-              'Sumber Pemantauan. Pilih sumber data, dan angka di beranda '
-              'langsung ikut berubah.',
+              'Sumber Pemantauan. Menampilkan informasi sumber data ISPU '
+              'dari stasiun resmi KLHK.',
           scrollAlignment: 0.2,
         ),
         CoachStep(
@@ -194,36 +275,108 @@ class HomePage extends StatelessWidget {
             'menyesuaikan kondisi udara.',
       );
 
-  HomePage _withSource(AirSnapshot a) {
-    final bool custom = a.source != MonitoringSource.klhk;
+  HomePage _withSource(AirSnapshot a, BuildContext context) {
+    final mon = MonitoringState.instance;
+    final reading = mon.currentReading;
+
+    final String currentLocation = AppSettings.instance.locationName.isNotEmpty
+        ? AppSettings.instance.locationName
+        : (mon.locationName.isNotEmpty ? mon.locationName : a.location);
+    final currentUserName = UserProfileService.instance.shortName;
+
+    int displayIspu = a.ispu;
+    String displayStatus = a.status;
+    String displayIspuValue = a.ispuValue;
+    String displayIspuLabel = a.ispuLabel;
+    String displayPm25 = a.pm25;
+    String displaySourceText = a.sourceText;
+    String displayDate = a.updatedAt;
+
+    if (reading != null) {
+      displayStatus = reading.categoryLabel;
+      displaySourceText = 'Sumber: ${reading.provenanceText}';
+      final dt = reading.observedAt;
+      displayDate = '${dt.day} Nov ${dt.year}, ${dt.hour.toString().padLeft(2, '0')}.${dt.minute.toString().padLeft(2, '0')}';
+
+      if (reading.officialIspu != null) {
+        displayIspu = reading.officialIspu!;
+        displayIspuValue = displayIspu.toString();
+        displayIspuLabel = '$displayIspu ISPU';
+        displayPm25 = reading.formattedPm25;
+      } else if (reading.pm25 != null) {
+        displayIspu = reading.pm25!.round();
+        displayIspuValue = reading.pm25!.toStringAsFixed(1).replaceAll('.', ',');
+        displayIspuLabel = 'µg/m³ PM2.5';
+        displayPm25 = reading.formattedPm25;
+      }
+    }
+
+    final bool isThreatening = displayIspu >= 300;
+    IspuCategory category;
+    if (reading != null) {
+      category = reading.category;
+    } else {
+      if (displayIspu <= 0 && displayIspuValue == '--') {
+        category = IspuCategory.tidakTersedia;
+      } else if (displayIspu <= 50) {
+        category = IspuCategory.baik;
+      } else if (displayIspu <= 100) {
+        category = IspuCategory.sedang;
+      } else if (displayIspu <= 200) {
+        category = IspuCategory.tidakSehat;
+      } else if (displayIspu <= 300) {
+        category = IspuCategory.sangatTidakSehat;
+      } else {
+        category = IspuCategory.berbahaya;
+      }
+    }
+
     return HomePage(
-      userName: userName,
-      subtitle: subtitle,
-      location: location,
-      dateText: dateText,
-      airStatus: airStatus,
-      ispuValue: custom ? a.ispuValue : ispuValue,
-      ispuLabel: custom ? a.ispuLabel : ispuLabel,
-      airDescription: airDescription,
-      pm25: custom ? a.pm25 : pm25,
-      temperature: temperature,
-      humidity: humidity,
-      sourceText: custom ? a.sourceText : sourceText,
-      drawerMemberLabel: drawerMemberLabel,
-      alertIspu: alertIspu,
-      alertRegion: alertRegion,
-      showDailyNotification: showDailyNotification,
-      dailyNotificationIspu: dailyNotificationIspu,
+      userName: currentUserName,
+      subtitle: 'Panduan perlindungan · $currentUserName',
+      location: currentLocation,
+      dateText: displayDate,
+      airStatus: displayStatus,
+      airCategory: category,
+      ispuValue: displayIspuValue,
+      ispuLabel: displayIspuLabel,
+      airDescription: a.airDescription,
+      pm25: displayPm25,
+      temperature: a.temperature,
+      humidity: a.humidity,
+      sourceText: displaySourceText,
+      alertIspu: isThreatening ? displayIspu : null,
+      alertRegion: currentLocation,
+      showDailyNotification: displayIspu >= 200,
+      dailyNotificationIspu: displayIspu,
       onMenuTap: onMenuTap,
       onDrawerItemTap: onDrawerItemTap,
       onLogoutTap: onLogoutTap,
       onNotificationTap: onNotificationTap,
-      onLocationTap: onLocationTap,
-      onPetaUdaraTap: onPetaUdaraTap,
-      onRiwayatTap: onRiwayatTap,
-      onModeOfflineTap: onModeOfflineTap,
-      onSumberPemantauanTap: onSumberPemantauanTap,
-      onHealthStepTap: onHealthStepTap,
+      onLocationTap: onLocationTap ??
+          () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const RegionPage()),
+              ),
+      onPetaUdaraTap: onPetaUdaraTap ??
+          () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => MapPage(wilayah: currentLocation)),
+              ),
+      onRiwayatTap: onRiwayatTap ??
+          () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AirQualityHistoryPage()),
+              ),
+      onModeOfflineTap: onModeOfflineTap ??
+          () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ModeOfflinePage()),
+              ),
+      onSumberPemantauanTap: onSumberPemantauanTap ??
+          () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SumberPemantauanPage()),
+              ),
+      onHealthStepTap: onHealthStepTap ??
+          () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ContextRecommendationPage()),
+              ),
       onLihatSemuaTap: onLihatSemuaTap,
       onArticleTap: onArticleTap,
     );
@@ -232,9 +385,9 @@ class HomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: AppSettings.instance,
+      listenable: Listenable.merge([AppSettings.instance, UserProfileService.instance, MonitoringState.instance]),
       builder: (context, _) {
-        final view = _withSource(AppSettings.instance.snapshot);
+        final view = _withSource(AppSettings.instance.snapshot, context);
         return VoiceScope(
           screen: 'now',
           tour: _tour,
@@ -259,9 +412,26 @@ class HomePage extends StatelessWidget {
         drawerScrimColor: const Color(0x6B1A2622),
         drawer: TeduhDrawer(
           current: HomeMenuItem.now,
-          memberLabel: drawerMemberLabel,
           onItemTap: onDrawerItemTap,
           onLogoutTap: onLogoutTap,
+        ),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AiAssistantPage()),
+            );
+          },
+          backgroundColor: const Color(0xFF1F6B4F),
+          foregroundColor: Colors.white,
+          elevation: 4,
+          icon: const Icon(Icons.auto_awesome_rounded, size: 20),
+          label: Text(
+            'Tanya TEDUH AI',
+            style: GoogleFonts.poppins(
+              fontWeight: FontWeight.w600,
+              fontSize: 12.5,
+            ),
+          ),
         ),
         body: Stack(
           fit: StackFit.expand,
@@ -428,7 +598,7 @@ class HomePage extends StatelessWidget {
               style: GoogleFonts.inter(
                 fontSize: 7.3 * s,
                 fontWeight: FontWeight.w700,
-                color: _HomeColors.alert,
+                color: AirCardTheme.fromCategory(airCategory).valueColor,
               ),
             ),
           ],
@@ -438,16 +608,17 @@ class HomePage extends StatelessWidget {
   }
 
   Widget _buildAirCard(double s) {
+    final theme = AirCardTheme.fromCategory(airCategory);
     return Padding(
       padding: EdgeInsets.only(left: 17.5 * s, right: 22.25 * s),
       child: Container(
         decoration: BoxDecoration(
-          color: _HomeColors.cardBg,
+          color: theme.bg,
           borderRadius: BorderRadius.circular(15 * s),
-          border: Border.all(color: _HomeColors.cardLine, width: 1.2),
+          border: Border.all(color: theme.border, width: 1.2),
           boxShadow: [
             BoxShadow(
-              color: _HomeColors.alert.withValues(alpha: 0.10),
+              color: theme.shadowColor,
               blurRadius: 12 * s,
               offset: Offset(0, 4 * s),
             ),
@@ -473,7 +644,7 @@ class HomePage extends StatelessWidget {
                       children: [
                         TextSpan(
                           text: airStatus,
-                          style: const TextStyle(color: _HomeColors.alert),
+                          style: TextStyle(color: theme.valueColor),
                         ),
                       ],
                     ),
@@ -490,7 +661,7 @@ class HomePage extends StatelessWidget {
                           height: 1.0,
                           letterSpacing: -1.6,
                           fontWeight: FontWeight.w800,
-                          color: _HomeColors.alert,
+                          color: theme.valueColor,
                         ),
                       ),
                       SizedBox(width: 7 * s),
@@ -499,7 +670,7 @@ class HomePage extends StatelessWidget {
                         style: GoogleFonts.inter(
                           fontSize: 7.6 * s,
                           fontWeight: FontWeight.w700,
-                          color: _HomeColors.alert,
+                          color: theme.valueColor,
                         ),
                       ),
                     ],
@@ -539,13 +710,6 @@ class HomePage extends StatelessWidget {
                   ),
                 ],
               ),
-            ),
-            Positioned(
-              right: 1 * s,
-              top: 25 * s,
-              width: 67 * s,
-              height: 82 * s,
-              child: CustomPaint(painter: _MaskedManPainter()),
             ),
           ],
         ),
@@ -683,6 +847,36 @@ class HomePage extends StatelessWidget {
   }
 
   Widget _buildHealthStepCard(double s) {
+    final theme = AirCardTheme.fromCategory(airCategory);
+    String stepTitle;
+    String stepBody;
+    switch (airCategory) {
+      case IspuCategory.baik:
+        stepTitle = 'Nikmati udara bersih.';
+        stepBody = 'Sangat baik untuk aktivitas luar ruangan, olahraga, dan ventilasi alami rumah.';
+        break;
+      case IspuCategory.sedang:
+        stepTitle = 'Kondisi udara cukup aman.';
+        stepBody = 'Aman beraktivitas normal. Kelompok sangat sensitif perhatikan bila langit mulai berasap.';
+        break;
+      case IspuCategory.tidakSehat:
+        stepTitle = 'Kurangi aktivitas di luar.';
+        stepBody = 'Kelompok sensitif sebaiknya gunakan masker saat keluar dan tutup ventilasi jika berasap.';
+        break;
+      case IspuCategory.sangatTidakSehat:
+        stepTitle = 'Hindari paparan asap luar.';
+        stepBody = 'Gunakan respirator N95 bila terpaksa keluar. Tutup jendela dan hidupkan sirkulasi dalam.';
+        break;
+      case IspuCategory.berbahaya:
+        stepTitle = 'Bahaya kabut asap pekat.';
+        stepBody = 'Hindari aktivitas luar ruangan. Tetap di ruang berfilter dan pantau perkembangan kabut asap.';
+        break;
+      case IspuCategory.tidakTersedia:
+        stepTitle = 'Kondisi udara sedang dipantau.';
+        stepBody = 'Menghubungkan ke pemantauan udara untuk rekomendasi perlindungan kesehatan personal.';
+        break;
+    }
+
     return Padding(
       padding: EdgeInsets.only(left: 17.5 * s, right: 22.25 * s),
       child: GestureDetector(
@@ -691,9 +885,9 @@ class HomePage extends StatelessWidget {
         child: Container(
           padding: EdgeInsets.fromLTRB(11 * s, 11.5 * s, 10 * s, 11.5 * s),
           decoration: BoxDecoration(
-            color: _HomeColors.stepBg,
+            color: theme.stepBg,
             borderRadius: BorderRadius.circular(13 * s),
-            border: Border.all(color: _HomeColors.cardLine, width: 1.2),
+            border: Border.all(color: theme.border, width: 1.2),
           ),
           child: Row(
             children: [
@@ -703,10 +897,10 @@ class HomePage extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: const Color(0xFFFAFDFB),
                   borderRadius: BorderRadius.circular(9 * s),
-                  border: Border.all(color: _HomeColors.iconGreen, width: 1.2),
+                  border: Border.all(color: theme.border, width: 1.2),
                 ),
                 child: Icon(Icons.air_rounded,
-                    size: 17 * s, color: _HomeColors.accent),
+                    size: 17 * s, color: theme.valueColor),
               ),
               SizedBox(width: 9 * s),
               Expanded(
@@ -720,31 +914,22 @@ class HomePage extends StatelessWidget {
                         height: 1.2,
                         letterSpacing: 0.8,
                         fontWeight: FontWeight.w800,
-                        color: _HomeColors.alert,
+                        color: theme.valueColor,
                       ),
                     ),
                     SizedBox(height: 3.8 * s),
-                    Text.rich(
-                      TextSpan(
-                        text: 'Hindari paparan ',
-                        style: GoogleFonts.inter(
-                          fontSize: 10.3 * s,
-                          height: 1.2,
-                          fontWeight: FontWeight.w800,
-                          color: _HomeColors.cardTitle,
-                        ),
-                        children: const [
-                          TextSpan(
-                            text: 'kabut asap.',
-                            style: TextStyle(color: _HomeColors.alert),
-                          ),
-                        ],
+                    Text(
+                      stepTitle,
+                      style: GoogleFonts.inter(
+                        fontSize: 10.3 * s,
+                        height: 1.2,
+                        fontWeight: FontWeight.w800,
+                        color: theme.titleColor,
                       ),
                     ),
                     SizedBox(height: 3.9 * s),
                     Text(
-                      'Hindari aktivitas luar ruangan. Tutup jendela dan '
-                      'pantau perkembangan kabut asap.',
+                      stepBody,
                       style: GoogleFonts.inter(
                         fontSize: 7.7 * s,
                         height: 1.4,
@@ -872,25 +1057,6 @@ class HomePage extends StatelessWidget {
       ),
     );
   }
-}
-
-class _HamburgerPainter extends CustomPainter {
-  const _HamburgerPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final p = Paint()
-      ..color = _HomeColors.brandGreen
-      ..strokeWidth = size.width * 0.085
-      ..strokeCap = StrokeCap.round;
-    for (final f in [0.08, 0.5, 0.92]) {
-      canvas.drawLine(
-          Offset(0, size.height * f), Offset(size.width, size.height * f), p);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _TopLeafPainter extends CustomPainter {
@@ -1035,106 +1201,6 @@ void _homeLeaf(
     }
   }
   canvas.restore();
-}
-
-class _MaskedManPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final k = size.width / 78;
-    canvas.save();
-    canvas.clipRect(Offset.zero & size);
-    canvas.scale(k, k);
-
-    _homeLeaf(canvas, const Offset(68, 96), 62, 24, 0.22,
-        const Color(0xFFD3E6CE),
-        vein: const Color(0xFFB5D2B0));
-    _homeLeaf(canvas, const Offset(60, 96), 46, 18, -0.25,
-        const Color(0xFFBBD7B7),
-        vein: const Color(0xFF9FC29A));
-    _homeLeaf(canvas, const Offset(10, 96), 40, 15, -0.55,
-        const Color(0xFFC8DFC2),
-        vein: const Color(0xFFA9CCA3));
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-          const Rect.fromLTWH(55, 57, 15, 36), const Radius.circular(5)),
-      Paint()..color = const Color(0xFF9A7653),
-    );
-
-    final jacket = Path()
-      ..moveTo(18, 96)
-      ..lineTo(20, 63)
-      ..quadraticBezierTo(22, 52, 33, 49)
-      ..lineTo(47, 49)
-      ..quadraticBezierTo(58, 52, 60, 63)
-      ..lineTo(62, 96)
-      ..close();
-    canvas.drawPath(jacket, Paint()..color = const Color(0xFF1F6B55));
-
-    canvas.drawPath(
-      Path()
-        ..moveTo(35, 49)
-        ..lineTo(45, 49)
-        ..lineTo(40, 60)
-        ..close(),
-      Paint()..color = const Color(0xFFF2F2EE),
-    );
-    canvas.drawLine(
-      const Offset(40, 60),
-      const Offset(40, 96),
-      Paint()
-        ..color = const Color(0xFF165240)
-        ..strokeWidth = 0.9,
-    );
-    canvas.drawLine(
-      const Offset(52, 52),
-      const Offset(55, 96),
-      Paint()
-        ..color = const Color(0xFF14503F)
-        ..strokeWidth = 2.2,
-    );
-
-    canvas.drawRect(
-      const Rect.fromLTWH(36, 42, 8, 9),
-      Paint()..color = const Color(0xFFD9A07A),
-    );
-
-    canvas.drawOval(
-      Rect.fromCenter(center: const Offset(40, 26), width: 24, height: 22),
-      Paint()..color = const Color(0xFF2B2420),
-    );
-    canvas.drawOval(
-      Rect.fromCenter(center: const Offset(40, 33), width: 21, height: 23),
-      Paint()..color = const Color(0xFFE2AE86),
-    );
-
-    final eye = Paint()..color = const Color(0xFF2B2420);
-    canvas.drawCircle(const Offset(35.5, 31), 1.1, eye);
-    canvas.drawCircle(const Offset(44.5, 31), 1.1, eye);
-
-    final loop = Paint()
-      ..color = const Color(0xFFCFD8D5)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.8;
-    canvas.drawLine(const Offset(30.5, 36), const Offset(28.5, 33), loop);
-    canvas.drawLine(const Offset(49.5, 36), const Offset(51.5, 33), loop);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-          const Rect.fromLTWH(30.5, 34, 19, 11), const Radius.circular(3.5)),
-      Paint()..color = const Color(0xFFF4F7F6),
-    );
-    final pleat = Paint()
-      ..color = const Color(0xFFD6DFDC)
-      ..strokeWidth = 0.7;
-    canvas.drawLine(const Offset(32, 37.5), const Offset(48, 37.5), pleat);
-    canvas.drawLine(const Offset(32, 40), const Offset(48, 40), pleat);
-    canvas.drawLine(const Offset(32, 42.5), const Offset(48, 42.5), pleat);
-
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _ForestPainter extends CustomPainter {

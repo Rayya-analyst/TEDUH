@@ -4,6 +4,8 @@ import '../widgets/voice_scope.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../services/offline_data_service.dart';
+import '../state/monitoring_state.dart';
 import 'kelola_unduhan_page.dart';
 
 class ModeOfflinePage extends StatelessWidget {
@@ -45,7 +47,7 @@ class ModeOfflinePage extends StatelessWidget {
         CoachStep(
           target: _kChip,
           title: 'Waktu data terakhir',
-          body: 'Menunjukkan kapan data kualitas udara terakhir diperbarui, misalnya 2 jam lalu. Data baru muncul setelah kamu kembali online.',
+          body: 'Menunjukkan kapan data kualitas udara terakhir diperbarui. Data baru muncul setelah kamu mengunduh ulang atau kembali online.',
           scrollAlignment: 0.2,
         ),
         CoachStep(
@@ -65,7 +67,19 @@ class ModeOfflinePage extends StatelessWidget {
   Widget build(BuildContext context) => VoiceScope(
         screen: 'offline',
         tour: _tour,
-        guide: PageGuide(content: () => 'Ini halaman Mode Offline. Berisi data kualitas udara terakhir yang tersimpan, yaitu dua jam lalu, serta panduan kesehatan dan kontak darurat yang tetap bisa dibuka tanpa internet. Ada juga tombol Kelola Unduhan. Ucapkan kembali untuk ke halaman sebelumnya.'),
+        guide: PageGuide(content: () {
+          final regionId =
+              MonitoringState.instance.selectedRegion.regionId;
+          final pkg = OfflineDataService.instance.getPackage(regionId);
+          final timeLabel = pkg?.downloadedAt != null
+              ? pkg!.statusLabel
+                  .replaceFirst('Terunduh \u00b7 ', '')
+                  .replaceFirst('Kedaluwarsa \u00b7 ', '')
+              : 'belum ada unduhan';
+          return 'Ini halaman Mode Offline. Berisi data kualitas udara terakhir yang tersimpan, '
+              'yaitu $timeLabel, serta panduan kesehatan dan kontak darurat yang tetap bisa dibuka '
+              'tanpa internet. Ada juga tombol Kelola Unduhan. Ucapkan kembali untuk ke halaman sebelumnya.';
+        }),
         child: _buildBody(context),
       );
 
@@ -321,7 +335,6 @@ class ModeOfflinePage extends StatelessWidget {
               angle: 0.55,
               left: 98,
               top: 96),
-          // Titik hiasan
           Positioned(
             right: 6 * s,
             top: 52 * s,
@@ -373,28 +386,39 @@ class ModeOfflinePage extends StatelessWidget {
   }
 
   Widget _buildUpdatedChip(double s) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 9 * s, vertical: 4.5 * s),
-      decoration: BoxDecoration(
-        color: _chipBg,
-        borderRadius: BorderRadius.circular(20 * s),
-        border: Border.all(color: const Color(0xFFC3DDCD), width: 0.7),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.schedule_rounded, size: 8.5 * s, color: _green),
-          SizedBox(width: 4 * s),
-          Text(
-            'Data Terakhir: 2 jam lalu',
-            style: GoogleFonts.inter(
-              fontSize: 6.6 * s,
-              fontWeight: FontWeight.w600,
-              color: _green,
-            ),
+    return AnimatedBuilder(
+      animation: OfflineDataService.instance,
+      builder: (ctx, child) {
+        final regionId =
+            MonitoringState.instance.selectedRegion.regionId;
+        final pkg = OfflineDataService.instance.getPackage(regionId);
+        final label = pkg?.downloadedAt != null
+            ? 'Data Terakhir: ${pkg!.statusLabel.replaceFirst('Terunduh · ', '').replaceFirst('Kedaluwarsa · ', '')}'
+            : 'Data Terakhir: Belum ada unduhan';
+        return Container(
+          padding: EdgeInsets.symmetric(horizontal: 9 * s, vertical: 4.5 * s),
+          decoration: BoxDecoration(
+            color: _chipBg,
+            borderRadius: BorderRadius.circular(20 * s),
+            border: Border.all(color: const Color(0xFFC3DDCD), width: 0.7),
           ),
-        ],
-      ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.schedule_rounded, size: 8.5 * s, color: _green),
+              SizedBox(width: 4 * s),
+              Text(
+                label,
+                style: GoogleFonts.inter(
+                  fontSize: 6.6 * s,
+                  fontWeight: FontWeight.w600,
+                  color: _green,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

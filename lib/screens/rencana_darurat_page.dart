@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../widgets/coach_marks.dart';
 import '../widgets/voice_scope.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../data/emergency_contacts.dart' as ec;
+import '../state/monitoring_state.dart';
 import '../widgets/teduh_common.dart';
 import 'readiness_state.dart';
 
@@ -28,7 +32,7 @@ const List<_PlanStep> _planSteps = [
 class RencanaDaruratPage extends StatelessWidget {
   const RencanaDaruratPage({super.key});
 
-  static final SectionKeys _sk = SectionKeys(6);
+  static final SectionKeys _sk = SectionKeys(7);
 
   List<CoachStep> get _tour => [
         CoachStep(
@@ -45,9 +49,15 @@ class RencanaDaruratPage extends StatelessWidget {
         ),
         CoachStep(
           target: _sk.keys[2],
+          title: 'Kontak darurat resmi',
+          body: 'Nomor telepon resmi BPBD, pemadam kebakaran, dan rumah sakit di wilayah Kalimantan yang kamu pantau. Ketuk ikon telepon untuk langsung menghubungi.',
+          scrollAlignment: 0.3,
+        ),
+        CoachStep(
+          target: _sk.keys[3],
           title: 'Kontak darurat keluarga',
           body: 'Ketuk untuk menyimpan nama dan nomor kontak yang bisa dihubungi. Tombol Atur Kontak Darurat di bawah layar juga membukanya.',
-          scrollAlignment: 0.3,
+          scrollAlignment: 0.4,
         ),
       ];
 
@@ -150,7 +160,16 @@ _sk.reset();
               r(0.2 + i * 0.08, 0.62 + i * 0.08, _stepCard(i, _planSteps[i])),
             const SizedBox(height: 6),
             r(
-              0.6,
+              0.55,
+              0.9,
+              AnimatedBuilder(
+                animation: MonitoringState.instance,
+                builder: (ctx, child) => _buildResmiContacts(ctx),
+              ),
+            ),
+            const SizedBox(height: 6),
+            r(
+              0.65,
               1.0,
               ListenableBuilder(
                 listenable: s,
@@ -161,6 +180,205 @@ _sk.reset();
         );
       },
     );
+  }
+
+  Widget _buildResmiContacts(BuildContext context) {
+    final regionId = MonitoringState.instance.selectedRegion.regionId;
+    final contacts = ec.EmergencyContacts.getForRegion(regionId);
+    if (contacts.isEmpty) return const SizedBox.shrink();
+
+    final String wilayahLabel = regionId == 'nasional'
+        ? 'Nasional'
+        : MonitoringState.instance.selectedRegion.province;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: RC.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: RC.tile,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.emergency_outlined,
+                    size: 23, color: RC.green),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'KONTAK DARURAT RESMI',
+                      style: GoogleFonts.poppins(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                        color: RC.green,
+                      ),
+                    ),
+                    Text(
+                      '$wilayahLabel · Nasional',
+                      style: GoogleFonts.poppins(
+                          fontSize: 11.5, color: RC.grey),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          for (final c in contacts) _buildContactRow(context, c),
+          const SizedBox(height: 10),
+          Text(
+            'Nomor dari sumber resmi per Nov 2024. Selalu cek kembali ketersediaan layanan.',
+            style: GoogleFonts.poppins(
+                fontSize: 10, color: RC.grey, fontStyle: FontStyle.italic),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContactRow(BuildContext context, ec.EmergencyContact c) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F8F4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: RC.border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        c.name,
+                        style: GoogleFonts.poppins(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: RC.dark,
+                        ),
+                      ),
+                    ),
+                    if (c.verified)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFDDF0E4),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '✓ Terverifikasi',
+                          style: GoogleFonts.poppins(
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w700,
+                            color: RC.green,
+                          ),
+                        ),
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFBF0DD),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '⚠ Belum Terverifikasi',
+                          style: GoogleFonts.poppins(
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w700,
+                            color: const Color(0xFF9A6A12),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  c.function,
+                  style: GoogleFonts.poppins(
+                      fontSize: 10.5, color: RC.grey),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  c.phone,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: RC.dark,
+                  ),
+                ),
+                if (c.verifiedNote != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    c.verifiedNote!,
+                    style: GoogleFonts.poppins(
+                        fontSize: 9,
+                        color: RC.grey,
+                        fontStyle: FontStyle.italic),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Column(
+            children: [
+              IconButton(
+                onPressed: () => _callNumber(context, c.phone),
+                icon: const Icon(Icons.call_outlined, size: 20, color: RC.green),
+                tooltip: 'Telepon',
+              ),
+              IconButton(
+                onPressed: () => _copyNumber(context, c.phone),
+                icon: const Icon(Icons.copy_outlined, size: 18, color: RC.grey),
+                tooltip: 'Salin nomor',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _callNumber(BuildContext context, String phone) async {
+    final uri = Uri.parse('tel:$phone');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Tidak dapat membuka aplikasi telepon untuk $phone')),
+      );
+    }
+  }
+
+  void _copyNumber(BuildContext context, String phone) {
+    Clipboard.setData(ClipboardData(text: phone));
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Nomor $phone disalin')),
+      );
+    }
   }
 
   Widget _stepCard(int i, _PlanStep s) {

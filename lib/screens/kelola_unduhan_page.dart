@@ -1,33 +1,16 @@
-import '../widgets/coach_marks.dart';
-import '../widgets/voice_scope.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-class KelolaUnduhanPage extends StatefulWidget {
+import '../models/air_quality_models.dart';
+import '../services/offline_data_service.dart';
+import '../state/monitoring_state.dart';
+import '../widgets/coach_marks.dart';
+import '../widgets/voice_scope.dart';
+
+class KelolaUnduhanPage extends StatelessWidget {
   const KelolaUnduhanPage({super.key});
 
-  @override
-  State<KelolaUnduhanPage> createState() => _KelolaUnduhanPageState();
-}
-
-class _DownloadItem {
-  final String id;
-  final IconData icon;
-  final String title;
-  final String meta;
-  final double sizeMb;
-
-  const _DownloadItem({
-    required this.id,
-    required this.icon,
-    required this.title,
-    required this.meta,
-    required this.sizeMb,
-  });
-}
-
-class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
   static const Color _green = Color(0xFF176D59);
   static const Color _greenIcon = Color(0xFF2E7B67);
   static const Color _ink = Color(0xFF0F2A24);
@@ -35,49 +18,27 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
   static const Color _muted = Color(0xFF8A9691);
   static const Color _iconBox = Color(0xFFDDEEE3);
   static const Color _cardLine = Color(0xFFD3E4DA);
-
   static const double _limitMb = 100;
 
-  final List<_DownloadItem> _items = [
-    const _DownloadItem(
-      id: 'udara',
-      icon: Icons.air_rounded,
-      title: 'Data kualitas udara',
-      meta: 'Jakarta · 2 jam lalu',
-      sizeMb: 8.4,
-    ),
-    const _DownloadItem(
-      id: 'panduan',
-      icon: Icons.menu_book_outlined,
-      title: 'Panduan kesehatan',
-      meta: '3 panduan',
-      sizeMb: 15.2,
-    ),
-    const _DownloadItem(
-      id: 'kontak',
-      icon: Icons.contact_phone_outlined,
-      title: 'Kontak darurat',
-      meta: '2 kontak pribadi',
-      sizeMb: 0.4,
-    ),
-  ];
+  static String _fmtBytes(int? bytes) {
+    if (bytes == null || bytes == 0) return '0 MB';
+    final mb = bytes / (1024 * 1024);
+    final t = mb.toStringAsFixed(1);
+    return '${t.endsWith('.0') ? t.substring(0, t.length - 2) : t.replaceAll('.', ',')} MB';
+  }
 
-  bool _hasPending = true;
-
-  double get _usedMb => _items.fold(0.0, (sum, e) => sum + e.sizeMb);
-
-  String _fmt(double v) {
-    final String t = v.toStringAsFixed(1);
+  static String _fmtMb(double v) {
+    final t = v.toStringAsFixed(1);
     return t.endsWith('.0') ? t.substring(0, t.length - 2) : t.replaceAll('.', ',');
   }
 
-  Future<void> _confirmDeleteAll() async {
+  Future<void> _confirmDeleteAll(BuildContext context) async {
     final bool? ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Hapus semua unduhan?'),
         content: const Text(
-            'Semua data yang tersimpan di perangkat akan dihapus.'),
+            'Semua data offline yang tersimpan di perangkat akan dihapus.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -85,16 +46,40 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
             child: const Text('Hapus'),
           ),
         ],
       ),
     );
-    if (ok == true && mounted) {
-      setState(() {
-        _items.clear();
-        _hasPending = false;
-      });
+    if (ok == true) {
+      for (final region in MonitoringRegion.allSupported) {
+        await OfflineDataService.instance.deletePackage(region.regionId);
+      }
+    }
+  }
+
+  Future<void> _confirmDelete(BuildContext context, String regionId, String regionName) async {
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Hapus unduhan $regionName?'),
+        content: Text('Data offline untuk $regionName akan dihapus dari perangkat.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Batal'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Hapus'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await OfflineDataService.instance.deletePackage(regionId);
     }
   }
 
@@ -102,18 +87,50 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
   Widget build(BuildContext context) => VoiceScope(
         screen: 'downloads',
         tour: const [
-          CoachStep(title: 'Penyimpanan offline', body: 'Daftar data yang tersimpan di perangkat: data kualitas udara, panduan kesehatan, dan kontak darurat, masing-masing dengan keterangan terunduh atau menunggu koneksi.'),
-          CoachStep(title: 'Pembaruan data udara', body: 'Menunjukkan apakah ada pembaruan yang tertunda. Unduhan baru perlu koneksi internet.'),
-          CoachStep(title: 'Hapus semua unduhan', body: 'Ketuk untuk menghapus semua data yang tersimpan di perangkat. Kamu akan diminta konfirmasi lebih dulu.'),
+          CoachStep(
+              title: 'Penyimpanan offline',
+              body:
+                  'Daftar paket data offline per wilayah Kalimantan: status unduhan, ukuran, dan waktu terakhir diperbarui.'),
+          CoachStep(
+              title: 'Unduh atau perbarui',
+              body:
+                  'Ketuk Unduh untuk mengunduh data wilayah. Jika sudah terunduh, kamu bisa memperbarui atau menghapusnya.'),
+          CoachStep(
+              title: 'Hapus semua unduhan',
+              body:
+                  'Ketuk untuk menghapus semua data offline dari perangkat. Kamu akan diminta konfirmasi lebih dulu.'),
         ],
         guide: PageGuide(
-          content: () => 'Ini halaman Kelola Unduhan. Berisi penyimpanan offline: data kualitas udara, panduan kesehatan, dan kontak darurat. Ada juga status pembaruan data udara dan tombol Hapus semua unduhan.',
+          content: () {
+            final pkgs = OfflineDataService.instance.allPackages;
+            final downloaded =
+                pkgs.where((p) => p.effectiveStatus == OfflinePackageStatus.downloaded || p.effectiveStatus == OfflinePackageStatus.stale).length;
+            return 'Ini halaman Kelola Unduhan. Tersedia $downloaded dari ${MonitoringRegion.allSupported.length} paket wilayah yang terunduh. Ketuk Unduh untuk mengunduh data offline suatu wilayah.';
+          },
         ),
-        child: _buildPage(context),
+        child: AnimatedBuilder(
+          animation: OfflineDataService.instance,
+          builder: (ctx, child) => _buildPage(ctx),
+        ),
       );
 
   Widget _buildPage(BuildContext context) {
     final double s = MediaQuery.of(context).size.width / 282;
+    final svc = OfflineDataService.instance;
+    final pkgs = MonitoringRegion.allSupported
+        .map((r) => svc.getPackage(r.regionId) ??
+            OfflinePackage(regionId: r.regionId, regionName: r.province))
+        .toList();
+
+    final int totalBytes = pkgs.fold(0, (sum, p) => sum + (p.sizeBytes ?? 0));
+    final double usedMb = totalBytes / (1024 * 1024);
+    final double progress = (usedMb / _limitMb).clamp(0.0, 1.0);
+
+    final String selectedId =
+        MonitoringState.instance.selectedRegion.regionId;
+
+    final bool anyDownloaded = pkgs.any(
+        (p) => p.status == OfflinePackageStatus.downloaded);
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.dark.copyWith(
@@ -163,35 +180,20 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
                     SizedBox(height: 8 * s),
                     _buildSubtitle(s),
                     SizedBox(height: 14 * s),
-                    _buildStorageCard(s),
+                    _buildStorageCard(s, usedMb: usedMb, progress: progress),
                     SizedBox(height: 16 * s),
-                    _buildSectionRow(s, 'TERUNDUH', '${_items.length} kategori'),
+                    _buildSectionRow(s, 'PAKET WILAYAH',
+                        '${pkgs.where((p) => p.status == OfflinePackageStatus.downloaded || p.status == OfflinePackageStatus.stale).length} terunduh'),
                     SizedBox(height: 8 * s),
-                    if (_items.isEmpty)
-                      Padding(
-                        padding: EdgeInsets.symmetric(vertical: 16 * s),
-                        child: Center(
-                          child: Text(
-                            'Belum ada unduhan tersimpan',
-                            style: GoogleFonts.inter(
-                                fontSize: 7 * s, color: _muted),
-                          ),
-                        ),
-                      ),
-                    for (final item in _items) ...[
-                      _buildDownloadCard(s, item),
+                    for (final pkg in pkgs) ...[
+                      _buildPackageCard(context, s, pkg,
+                          isSelected: pkg.regionId == selectedId),
                       SizedBox(height: 8 * s),
                     ],
-                    if (_hasPending) ...[
-                      SizedBox(height: 6 * s),
-                      _buildSectionRow(s, 'MENUNGGU KONEKSI', null),
-                      SizedBox(height: 8 * s),
-                      _buildPendingCard(s),
-                    ],
-                    SizedBox(height: 14 * s),
+                    SizedBox(height: 6 * s),
                     _buildNote(s),
                     SizedBox(height: 14 * s),
-                    _buildDeleteAll(s),
+                    _buildDeleteAll(context, s, enabled: anyDownloaded),
                   ],
                 ),
               ),
@@ -250,7 +252,9 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
         ),
         children: const [
           TextSpan(text: 'Siap, meski '),
-          TextSpan(text: 'tanpa koneksi.', style: TextStyle(color: _green)),
+          TextSpan(
+              text: 'tanpa koneksi.',
+              style: TextStyle(color: _green)),
         ],
       ),
     );
@@ -258,14 +262,13 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
 
   Widget _buildSubtitle(double s) {
     return Text(
-      'Atur data dan panduan yang tersimpan di perangkat Anda.',
+      'Unduh data wilayah Kalimantan untuk diakses tanpa internet.',
       style: GoogleFonts.inter(fontSize: 7.7 * s, height: 1.5, color: _body),
     );
   }
 
-  Widget _buildStorageCard(double s) {
-    final double used = _usedMb;
-    final double progress = (used / _limitMb).clamp(0.0, 1.0);
+  Widget _buildStorageCard(double s,
+      {required double usedMb, required double progress}) {
     return Container(
       width: double.infinity,
       padding: EdgeInsets.fromLTRB(11 * s, 11 * s, 11 * s, 10 * s),
@@ -290,7 +293,7 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
               ),
               const Spacer(),
               Text(
-                '${_fmt(used)} MB',
+                '${_fmtMb(usedMb)} MB',
                 style: GoogleFonts.inter(
                   fontSize: 10 * s,
                   fontWeight: FontWeight.w800,
@@ -316,12 +319,12 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
           Row(
             children: [
               Text(
-                '${_fmt(used)} MB dari batas ${_fmt(_limitMb)} MB',
+                '${_fmtMb(usedMb)} MB dari batas ${_fmtMb(_limitMb)} MB',
                 style: GoogleFonts.inter(fontSize: 5.8 * s, color: _body),
               ),
               const Spacer(),
               Text(
-                '${_fmt(_limitMb - used)} MB tersisa',
+                '${_fmtMb(_limitMb - usedMb)} MB tersisa',
                 style: GoogleFonts.inter(fontSize: 5.8 * s, color: _body),
               ),
             ],
@@ -353,13 +356,50 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
     );
   }
 
-  Widget _buildDownloadCard(double s, _DownloadItem item) {
+  Widget _buildPackageCard(BuildContext context, double s, OfflinePackage pkg,
+      {bool isSelected = false}) {
+    final status = pkg.effectiveStatus;
+    final bool isDownloading = status == OfflinePackageStatus.downloading;
+    final bool isDownloaded = status == OfflinePackageStatus.downloaded;
+    final bool isStale = status == OfflinePackageStatus.stale;
+    final bool isFailed = status == OfflinePackageStatus.failed;
+    final bool notDownloaded = status == OfflinePackageStatus.notDownloaded;
+
+    Color badgeBg;
+    Color badgeText;
+    String badgeLabel;
+    if (isDownloaded) {
+      badgeBg = const Color(0xFFDDF0E4);
+      badgeText = _green;
+      badgeLabel = 'Tersedia offline';
+    } else if (isStale) {
+      badgeBg = const Color(0xFFFBF0DD);
+      badgeText = const Color(0xFF9A6A12);
+      badgeLabel = 'Kedaluwarsa';
+    } else if (isDownloading) {
+      badgeBg = const Color(0xFFE0EFFF);
+      badgeText = const Color(0xFF1A56A0);
+      badgeLabel = 'Mengunduh…';
+    } else if (isFailed) {
+      badgeBg = const Color(0xFFFFE9E9);
+      badgeText = const Color(0xFFB00020);
+      badgeLabel = 'Gagal';
+    } else {
+      badgeBg = const Color(0xFFF0F0F0);
+      badgeText = _muted;
+      badgeLabel = 'Belum diunduh';
+    }
+
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 10 * s, vertical: 11 * s),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.92),
+        color: isSelected
+            ? const Color(0xFFEBF5EF)
+            : Colors.white.withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(12 * s),
-        border: Border.all(color: _cardLine, width: 0.8),
+        border: Border.all(
+            color: isSelected ? _green : _cardLine,
+            width: isSelected ? 1.1 : 0.8),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.03),
@@ -368,125 +408,203 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 26 * s,
-            height: 26 * s,
-            decoration: BoxDecoration(
-              color: _iconBox,
-              borderRadius: BorderRadius.circular(8 * s),
-            ),
-            child: Icon(item.icon, size: 12.5 * s, color: _greenIcon),
-          ),
-          SizedBox(width: 10 * s),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.title,
-                  style: GoogleFonts.inter(
-                    fontSize: 8 * s,
-                    fontWeight: FontWeight.w700,
-                    color: _ink,
-                  ),
+          Row(
+            children: [
+              Container(
+                width: 26 * s,
+                height: 26 * s,
+                decoration: BoxDecoration(
+                  color: _iconBox,
+                  borderRadius: BorderRadius.circular(8 * s),
                 ),
-                SizedBox(height: 3 * s),
-                Text(
-                  '${item.meta} · ${_fmt(item.sizeMb)} MB',
-                  style: GoogleFonts.inter(fontSize: 6.2 * s, color: _muted),
-                ),
-                SizedBox(height: 4 * s),
-                Row(
+                child: Icon(Icons.location_city_rounded,
+                    size: 12.5 * s, color: _greenIcon),
+              ),
+              SizedBox(width: 10 * s),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.check_circle_outline_rounded,
-                        size: 7 * s, color: _green),
-                    SizedBox(width: 3 * s),
-                    Text(
-                      'Tersedia offline',
-                      style: GoogleFonts.inter(
-                        fontSize: 6.2 * s,
-                        fontWeight: FontWeight.w600,
-                        color: _green,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            pkg.regionName,
+                            style: GoogleFonts.inter(
+                              fontSize: 8 * s,
+                              fontWeight: FontWeight.w700,
+                              color: _ink,
+                            ),
+                          ),
+                        ),
+                        if (isSelected)
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                                horizontal: 5 * s, vertical: 1.5 * s),
+                            decoration: BoxDecoration(
+                              color: _green,
+                              borderRadius: BorderRadius.circular(10 * s),
+                            ),
+                            child: Text(
+                              'Aktif',
+                              style: GoogleFonts.inter(
+                                fontSize: 5.5 * s,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    SizedBox(height: 2 * s),
+                    Row(
+                      children: [
+                        Container(
+                          padding: EdgeInsets.symmetric(
+                              horizontal: 5 * s, vertical: 1.5 * s),
+                          decoration: BoxDecoration(
+                            color: badgeBg,
+                            borderRadius: BorderRadius.circular(8 * s),
+                          ),
+                          child: Text(
+                            badgeLabel,
+                            style: GoogleFonts.inter(
+                              fontSize: 5.8 * s,
+                              fontWeight: FontWeight.w600,
+                              color: badgeText,
+                            ),
+                          ),
+                        ),
+                        if (pkg.sizeBytes != null && pkg.sizeBytes! > 0) ...[
+                          SizedBox(width: 6 * s),
+                          Text(
+                            _fmtBytes(pkg.sizeBytes),
+                            style:
+                                GoogleFonts.inter(fontSize: 5.8 * s, color: _muted),
+                          ),
+                        ],
+                        if (pkg.downloadedAt != null) ...[
+                          SizedBox(width: 4 * s),
+                          Text(
+                            '\u00b7 ${_relativeTime(pkg.downloadedAt!)}',
+                            style: GoogleFonts.inter(
+                                fontSize: 5.8 * s, color: _muted),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => setState(() => _items.removeWhere((e) => e.id == item.id)),
-            child: Padding(
-              padding: EdgeInsets.all(4 * s),
-              child: Icon(Icons.delete_outline_rounded,
-                  size: 11 * s, color: const Color(0xFF6B7773)),
+          if (isDownloading) ...[
+            SizedBox(height: 8 * s),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4 * s),
+              child: Stack(
+                children: [
+                  Container(
+                      height: 3.5 * s, color: const Color(0xFFCFE4F4)),
+                  FractionallySizedBox(
+                    widthFactor: pkg.progress.clamp(0.0, 1.0),
+                    child: Container(
+                        height: 3.5 * s,
+                        color: const Color(0xFF1A56A0)),
+                  ),
+                ],
+              ),
             ),
+            SizedBox(height: 4 * s),
+            Text(
+              '${(pkg.progress * 100).toStringAsFixed(0)}% selesai…',
+              style: GoogleFonts.inter(
+                  fontSize: 6 * s, color: const Color(0xFF1A56A0)),
+            ),
+          ],
+          SizedBox(height: 10 * s),
+          Row(
+            children: [
+              if (notDownloaded || isFailed)
+                _actionBtn(
+                  s: s,
+                  label: 'Unduh',
+                  icon: Icons.download_rounded,
+                  color: _green,
+                  onTap: () => OfflineDataService.instance
+                      .downloadPackage(pkg.regionId),
+                ),
+              if (isDownloaded || isStale) ...[
+                _actionBtn(
+                  s: s,
+                  label: 'Perbarui',
+                  icon: Icons.refresh_rounded,
+                  color: _green,
+                  onTap: () => OfflineDataService.instance
+                      .downloadPackage(pkg.regionId),
+                ),
+                SizedBox(width: 8 * s),
+                _actionBtn(
+                  s: s,
+                  label: 'Hapus',
+                  icon: Icons.delete_outline_rounded,
+                  color: const Color(0xFF6B7773),
+                  outline: true,
+                  onTap: () =>
+                      _confirmDelete(context, pkg.regionId, pkg.regionName),
+                ),
+              ],
+              if (isDownloading)
+                Text(
+                  'Sedang mengunduh…',
+                  style:
+                      GoogleFonts.inter(fontSize: 6.5 * s, color: _muted),
+                ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildPendingCard(double s) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 10 * s, vertical: 12 * s),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFBF0DD),
-        borderRadius: BorderRadius.circular(12 * s),
-        border: Border.all(color: const Color(0xFFEFDDB9), width: 0.9),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 24 * s,
-            height: 24 * s,
-            decoration: BoxDecoration(
-              color: const Color(0xFFF6E3BE),
-              borderRadius: BorderRadius.circular(8 * s),
-            ),
-            child: Icon(Icons.schedule_rounded,
-                size: 12 * s, color: const Color(0xFF9A6A12)),
-          ),
-          SizedBox(width: 10 * s),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Pembaruan data udara',
-                  style: GoogleFonts.inter(
-                    fontSize: 7.6 * s,
-                    fontWeight: FontWeight.w700,
-                    color: _ink,
-                  ),
-                ),
-                SizedBox(height: 3 * s),
-                Text(
-                  'Tertunda · Perlu koneksi internet',
-                  style: GoogleFonts.inter(fontSize: 6.2 * s, color: _muted),
-                ),
-              ],
-            ),
-          ),
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => setState(() => _hasPending = false),
-            child: Padding(
-              padding: EdgeInsets.all(3 * s),
-              child: Text(
-                'Batal',
-                style: GoogleFonts.inter(
-                  fontSize: 6.8 * s,
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF8A5A0A),
-                ),
+  Widget _actionBtn({
+    required double s,
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+    bool outline = false,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 10 * s, vertical: 5 * s),
+        decoration: BoxDecoration(
+          color: outline ? Colors.transparent : color.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(8 * s),
+          border: Border.all(
+              color: outline ? color.withValues(alpha: 0.4) : color.withValues(alpha: 0.3),
+              width: 0.8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 8 * s, color: color),
+            SizedBox(width: 4 * s),
+            Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 6.8 * s,
+                fontWeight: FontWeight.w700,
+                color: color,
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -497,38 +615,43 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
       children: [
         Padding(
           padding: EdgeInsets.only(top: 1 * s),
-          child: Icon(Icons.info_outline_rounded, size: 7.5 * s, color: _body),
+          child:
+              Icon(Icons.info_outline_rounded, size: 7.5 * s, color: _body),
         ),
         SizedBox(width: 6 * s),
         Expanded(
           child: Text(
-            'Data terakhir: 2 jam lalu. Unduhan baru dan pembaruan '
-            'memerlukan koneksi internet.',
-            style: GoogleFonts.inter(fontSize: 6.2 * s, height: 1.5, color: _body),
+            'Unduhan baru dan pembaruan memerlukan koneksi internet. '
+            'Data offline berlaku 24 jam sebelum dianggap kedaluwarsa.',
+            style:
+                GoogleFonts.inter(fontSize: 6.2 * s, height: 1.5, color: _body),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildDeleteAll(double s) {
+  Widget _buildDeleteAll(BuildContext context, double s,
+      {required bool enabled}) {
     return Center(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: _items.isEmpty && !_hasPending ? null : _confirmDeleteAll,
+        onTap: enabled ? () => _confirmDeleteAll(context) : null,
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: 10 * s, vertical: 6 * s),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.delete_outline_rounded, size: 9.5 * s, color: _green),
+              Icon(Icons.delete_outline_rounded,
+                  size: 9.5 * s,
+                  color: enabled ? _green : _muted),
               SizedBox(width: 5 * s),
               Text(
                 'Hapus semua unduhan',
                 style: GoogleFonts.inter(
                   fontSize: 7.4 * s,
                   fontWeight: FontWeight.w700,
-                  color: _green,
+                  color: enabled ? _green : _muted,
                 ),
               ),
             ],
@@ -536,5 +659,13 @@ class _KelolaUnduhanPageState extends State<KelolaUnduhanPage> {
         ),
       ),
     );
+  }
+
+  static String _relativeTime(DateTime t) {
+    final diff = DateTime.now().difference(t);
+    if (diff.inMinutes < 1) return 'baru saja';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} menit lalu';
+    if (diff.inHours < 24) return '${diff.inHours} jam lalu';
+    return '${diff.inDays} hari lalu';
   }
 }

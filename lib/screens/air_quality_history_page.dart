@@ -1,4 +1,7 @@
 import 'dart:math' as math;
+import '../state/monitoring_state.dart';
+import '../models/air_quality_models.dart';
+import '../services/air_quality_repository.dart';
 import '../widgets/coach_marks.dart';
 import '../widgets/voice_scope.dart';
 
@@ -84,16 +87,6 @@ class _Report {
   int get days => chart.length;
 }
 
-final DateTime _latest = DateTime(2026, 11, 3);
-
-const List<String> _districts = [
-  'Jekan Raya',
-  'Pahandut',
-  'Bukit Batu',
-  'Sabangau',
-  'Rakumpit',
-];
-
 const _months = [
   'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
   'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des',
@@ -119,44 +112,6 @@ String _fmtRange(DateTimeRange r) {
   return '${s.day} $sm ${s.year} – ${e.day} $em ${e.year}';
 }
 
-_Report _designReport() {
-  final chartValues = [210, 48, 62, 74, 310, 360, 462];
-  final start = DateTime(2026, 10, 28);
-  final chart = List.generate(
-    7,
-    (i) => _Entry(DateTime(start.year, start.month, start.day + i),
-        chartValues[i]),
-  );
-  final daily = [
-    _Entry(DateTime(2026, 11, 3), 462),
-    _Entry(DateTime(2026, 11, 2), 155),
-    _Entry(DateTime(2026, 11, 1), 354),
-    _Entry(DateTime(2026, 10, 31), 100),
-    _Entry(DateTime(2026, 10, 30), 62),
-    _Entry(DateTime(2026, 10, 29), 48),
-    _Entry(DateTime(2026, 10, 28), 210),
-  ];
-  return _Report(id: 'design', chart: chart, daily: daily, summary: 462);
-}
-
-_Report _generatedReport(DateTimeRange range, String district) {
-  final days = range.end.difference(range.start).inDays + 1;
-  final chart = List.generate(days, (i) {
-    final d = DateTime(range.start.year, range.start.month, range.start.day + i);
-    final rnd = math.Random(
-        d.year * 10000 + d.month * 100 + d.day + district.hashCode);
-    return _Entry(d, 35 + rnd.nextInt(420));
-  });
-  final avg =
-      (chart.fold<int>(0, (a, b) => a + b.ispu) / chart.length).round();
-  return _Report(
-    id: '${range.start}-${range.end}-$district',
-    chart: chart,
-    daily: chart.reversed.toList(),
-    summary: avg,
-  );
-}
-
 enum _Mode { d7, d30, custom }
 
 class AirQualityHistoryPage extends StatefulWidget {
@@ -172,17 +127,31 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
   late final AnimationController _chart;
 
   _Mode _mode = _Mode.d7;
-  String _district = 'Jekan Raya';
+  late String _district;
+  late List<MonitoringSite> _availableSites;
+  late MonitoringSite _selectedSite;
   DateTimeRange _range = DateTimeRange(
-    start: DateTime(2026, 10, 28),
-    end: _latest,
+    start: DateTime.now().subtract(const Duration(days: 6)),
+    end: DateTime.now(),
   );
-  late _Report _report = _designReport();
+  _Report? _report;
   bool _showAll = false;
+  bool _isLoading = false;
+  String? _loadError;
+  String _sourceLabel = '';
 
   @override
   void initState() {
     super.initState();
+    final mon = MonitoringState.instance;
+    _availableSites = MonitoringSite.getSitesForRegion(mon.selectedRegion.regionId);
+    if (!_availableSites.any((s) => s.siteId == mon.selectedSite.siteId)) {
+      _availableSites = [mon.selectedSite, ..._availableSites];
+    }
+    _selectedSite = mon.selectedSite;
+    _district = _selectedSite.stationName;
+    _sourceLabel = mon.selectedSource.sourceName;
+
     _anim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1300),
@@ -193,9 +162,8 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
       duration: const Duration(milliseconds: 1100),
       animationBehavior: AnimationBehavior.preserve,
     );
-    Future.delayed(const Duration(milliseconds: 450), () {
-      if (mounted) _chart.forward();
-    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
   }
 
   @override
@@ -205,15 +173,87 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
     super.dispose();
   }
 
-  void _refresh() {
-    final useDesign = _district == 'Jekan Raya' && _mode == _Mode.d7;
+  Future<void> _loadData() async {
+    if (!mounted) return;
     setState(() {
-      _report = useDesign
-          ? _designReport()
-          : _generatedReport(_range, _district);
-      _showAll = false;
+      _isLoading = true;
+      _loadError = null;
     });
-    _chart.forward(from: 0);
+
+    try {
+      final mon = MonitoringState.instance;
+      final duration = _range.end.difference(_range.start) + const Duration(days: 1);
+      final readings = await AirQualityRepository.instance.getHistoricalReadings(
+        site: _selectedSite,
+        sourceId: mon.selectedSource.sourceId,
+        duration: duration,
+      );
+
+      if (!mounted) return;
+
+      final Map<String, List<int>> dailyValues = {};
+      for (final r in readings) {
+        final val = r.officialIspu ?? r.pm25?.round();
+        if (val != null && val > 0) {
+          final d = r.observedAt.toLocal();
+          final key = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+          dailyValues.putIfAbsent(key, () => []).add(val);
+        }
+      }
+
+      final List<_Entry> dailyEntries = [];
+      final List<String> sortedKeys = dailyValues.keys.toList()..sort();
+
+      for (final key in sortedKeys) {
+        final vals = dailyValues[key]!;
+        if (vals.isEmpty) continue;
+        final dayIspu = (vals.reduce((a, b) => a + b) / vals.length).round();
+        final parts = key.split('-');
+        final year = int.parse(parts[0]);
+        final month = int.parse(parts[1]);
+        final day = int.parse(parts[2]);
+        dailyEntries.add(_Entry(
+          DateTime(year, month, day, 12, 0),
+          dayIspu,
+        ));
+      }
+
+      if (dailyEntries.isEmpty) {
+        setState(() {
+          _report = null;
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final avg = (dailyEntries.fold<int>(0, (a, b) => a + b.ispu) / dailyEntries.length).round();
+      final report = _Report(
+        id: '${_selectedSite.siteId}_${_range.start}_${_range.end}',
+        chart: dailyEntries,
+        daily: dailyEntries.reversed.toList(),
+        summary: avg,
+      );
+      setState(() {
+        _report = report;
+        _isLoading = false;
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      if (mounted) _chart.forward(from: 0);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _loadError = 'Gagal memuat data: $e';
+      });
+    }
+  }
+
+  void _refresh() {
+    setState(() {
+      _showAll = false;
+      _report = null;
+    });
+    _loadData();
   }
 
   void _selectMode(_Mode m) {
@@ -225,8 +265,8 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
     _mode = m;
     final days = m == _Mode.d7 ? 7 : 30;
     _range = DateTimeRange(
-      start: DateTime(_latest.year, _latest.month, _latest.day - (days - 1)),
-      end: _latest,
+      start: DateTime.now().subtract(Duration(days: days - 1)),
+      end: DateTime.now(),
     );
     _refresh();
   }
@@ -235,7 +275,7 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
     final picked = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2025, 1, 1),
-      lastDate: _latest,
+      lastDate: DateTime.now(),
       initialDateRange: _range,
       builder: (ctx, child) => Theme(
         data: Theme.of(ctx).copyWith(
@@ -287,26 +327,30 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
                   borderRadius: BorderRadius.circular(4),
                 ),
               ),
-              for (final d in _districts)
+              for (final site in _availableSites)
                 ListTile(
                   leading: Icon(Icons.location_on_outlined,
-                      color: d == _district ? _C.green : _C.hint),
+                      color: site.siteId == _selectedSite.siteId ? _C.green : _C.hint),
                   title: Text(
-                    '$d, Palangka Raya',
+                    site.stationName,
                     style: GoogleFonts.poppins(
                       fontSize: 13,
-                      fontWeight:
-                          d == _district ? FontWeight.w600 : FontWeight.w400,
+                      fontWeight: site.siteId == _selectedSite.siteId
+                          ? FontWeight.w600
+                          : FontWeight.w400,
                       color: _C.dark,
                     ),
                   ),
-                  trailing: d == _district
+                  trailing: site.siteId == _selectedSite.siteId
                       ? const Icon(Icons.check_rounded, color: _C.green)
                       : null,
                   onTap: () {
                     Navigator.pop(ctx);
-                    if (d != _district) {
-                      _district = d;
+                    if (site.siteId != _selectedSite.siteId) {
+                      setState(() {
+                        _selectedSite = site;
+                        _district = site.stationName;
+                      });
                       _refresh();
                     }
                   },
@@ -343,9 +387,11 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
       );
 
   Widget _buildBody(BuildContext context) {
-    final level = _levelOf(_report.summary);
-    final visibleDaily =
-        _showAll ? _report.daily : _report.daily.take(4).toList();
+    final report = _report;
+    final level = report != null ? _levelOf(report.summary) : _Level.baik;
+    final visibleDaily = report != null
+        ? (_showAll ? report.daily : report.daily.take(4).toList())
+        : <_Entry>[];
 
     return Scaffold(
       backgroundColor: _C.bg,
@@ -407,7 +453,7 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
                               size: 18, color: _C.green),
                           const SizedBox(width: 6),
                           Text(
-                            '$_district, Palangka Raya',
+                            _district,
                             style: GoogleFonts.poppins(
                               fontSize: 12,
                               fontWeight: FontWeight.w500,
@@ -500,7 +546,42 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
                     animation: _anim,
                     begin: 0.3,
                     end: 0.75,
-                    child: AnimatedContainer(
+                    child: _isLoading
+                        ? const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 40),
+                            child: Center(child: CircularProgressIndicator()),
+                          )
+                        : _loadError != null
+                            ? Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 24),
+                                child: Text(
+                                  _loadError!,
+                                  style: GoogleFonts.poppins(fontSize: 12, color: _C.hint),
+                                  textAlign: TextAlign.center,
+                                ),
+                              )
+                            : report == null
+                                ? Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 32),
+                                    child: Column(
+                                      children: [
+                                        const Icon(Icons.bar_chart_rounded, size: 48, color: _C.leaf),
+                                        const SizedBox(height: 12),
+                                        Text(
+                                          'Data historis belum tersedia\nuntuk sumber dan wilayah ini.',
+                                          style: GoogleFonts.poppins(fontSize: 12, color: _C.hint, height: 1.5),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          'Coba pilih sumber "Copernicus CAMS"\ndi menu Sumber Pemantauan.',
+                                          style: GoogleFonts.poppins(fontSize: 11, color: _C.leafLight, height: 1.4),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                : AnimatedContainer(
                       duration: const Duration(milliseconds: 300),
                       width: double.infinity,
                       padding: const EdgeInsets.all(14),
@@ -520,7 +601,7 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Rata-rata ISPU',
+                            'Rata-rata ${_sourceLabel.isNotEmpty ? '($_sourceLabel)' : ''}',
                             style: GoogleFonts.poppins(
                               fontSize: 11,
                               color: _C.hint,
@@ -541,7 +622,7 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
                                         final p = Curves.easeOutCubic
                                             .transform(_chart.value);
                                         return Text(
-                                          '${(_report.summary * p).round()}',
+                                          '${(report.summary * p).round()}',
                                           style: GoogleFonts.poppins(
                                             fontSize: 36,
                                             fontWeight: FontWeight.w700,
@@ -553,7 +634,7 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
                                     ),
                                     const SizedBox(width: 6),
                                     Text(
-                                      '/ ${_report.days} hari',
+                                      '/ ${report.days} data',
                                       style: GoogleFonts.poppins(
                                         fontSize: 11,
                                         color: _C.hint,
@@ -570,7 +651,7 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
                             ],
                           ),
                           const SizedBox(height: 14),
-                          _BarChart(entries: _report.chart, anim: _chart),
+                          _BarChart(entries: report.chart, anim: _chart),
                           const SizedBox(height: 14),
                           AnimatedContainer(
                             duration: const Duration(milliseconds: 300),
@@ -630,7 +711,7 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
                             child: Text(
                               _showAll
                                   ? 'Lihat ringkas'
-                                  : 'Lihat semua (${_report.days})',
+                                  : 'Lihat semua (${report?.days ?? 0})',
                               style: GoogleFonts.poppins(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
@@ -694,8 +775,8 @@ class _AirQualityHistoryPageState extends State<AirQualityHistoryPage>
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 4),
                       child: Text(
-                        'Data kualitas udara bersumber dari BMKG dan KLH. '
-                        'Kondisi udara dapat berubah sewaktu-waktu.',
+                        'Data historis bersumber dari ${_sourceLabel.isNotEmpty ? _sourceLabel : "sumber yang dipilih"}. '
+                        'Waktu observasi sesuai data aktual. Angka ditampilkan sebagaimana diterima tanpa modifikasi.',
                         style: GoogleFonts.poppins(
                           fontSize: 10,
                           height: 1.5,
@@ -987,7 +1068,7 @@ class _DailyRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  'Jalan Raya, Palangka Raya',
+                  district,
                   style: GoogleFonts.poppins(
                     fontSize: 10,
                     color: _C.hint,

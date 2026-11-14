@@ -7,6 +7,61 @@ import '../services/siren_service.dart';
 import '../services/voice_service.dart';
 import '../state/app_settings.dart';
 
+class _AlertRecord {
+  final DateTime lastAlertTime;
+  final int lastIspu;
+  const _AlertRecord({required this.lastAlertTime, required this.lastIspu});
+}
+
+class AlertCooldownManager {
+  AlertCooldownManager._();
+  static final AlertCooldownManager instance = AlertCooldownManager._();
+
+  final Map<String, _AlertRecord> _history = {};
+  DateTime? _snoozeUntil;
+
+  DateTime? get snoozeUntil => _snoozeUntil;
+  bool get isSnoozed =>
+      _snoozeUntil != null && DateTime.now().isBefore(_snoozeUntil!);
+
+  void snooze([Duration duration = const Duration(hours: 1)]) {
+    _snoozeUntil = DateTime.now().add(duration);
+  }
+
+  void cancelSnooze() {
+    _snoozeUntil = null;
+  }
+
+  bool shouldTriggerAlert(String region, int ispu, {int threshold = 300}) {
+    if (ispu < threshold) return false;
+    if (isSnoozed) return false;
+
+    final key = region.trim().toLowerCase();
+    final rec = _history[key];
+    if (rec == null) return true;
+
+    final elapsed = DateTime.now().difference(rec.lastAlertTime);
+    if (elapsed < const Duration(minutes: 20)) {
+      if (ispu - rec.lastIspu >= 50) {
+        return true;
+      }
+      return false;
+    }
+    return true;
+  }
+
+  void recordAlert(String region, int ispu) {
+    final key = region.trim().toLowerCase();
+    _history[key] =
+        _AlertRecord(lastAlertTime: DateTime.now(), lastIspu: ispu);
+  }
+
+  void clearHistory() {
+    _history.clear();
+    _snoozeUntil = null;
+  }
+}
+
 class PeringatanGawatDialog extends StatefulWidget {
   final int ispu;
   final String wilayah;
@@ -24,6 +79,13 @@ class PeringatanGawatDialog extends StatefulWidget {
     required int ispu,
     required String wilayah,
   }) {
+    if (ispu < 300) return Future.value();
+
+    if (!AlertCooldownManager.instance.shouldTriggerAlert(wilayah, ispu)) {
+      return Future.value();
+    }
+    AlertCooldownManager.instance.recordAlert(wilayah, ispu);
+
     return showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -216,12 +278,12 @@ class _PeringatanGawatBody extends StatelessWidget {
               ),
               SizedBox(height: 16 * s),
               Text(
-                'Kualitas udara memburuk hingga level berbahaya (ISPU >150). '
-                'Gunakan masker respirator!',
+                'Kualitas udara memburuk hingga level berbahaya (ISPU ≥ 300). '
+                'Segera masuk ke ruangan tertutup dan gunakan masker respirator N95!',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.inter(
-                  fontSize: 16 * s,
-                  height: 1.6,
+                  fontSize: 15 * s,
+                  height: 1.55,
                   color: _ink,
                 ),
               ),
@@ -243,16 +305,19 @@ class _PeringatanGawatBody extends StatelessWidget {
                   ),
                 ),
               ),
-              SizedBox(height: 22 * s),
+              SizedBox(height: 20 * s),
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () {
+                  SirenService.instance.stop();
+                  SirenService.instance.stopVibrate();
+                  VoiceService.instance.stopSpeaking();
                   onAcknowledge?.call();
                   Navigator.of(context).pop();
                 },
                 child: Container(
                   width: double.infinity,
-                  height: 56 * s,
+                  height: 54 * s,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     color: _red,
@@ -261,8 +326,8 @@ class _PeringatanGawatBody extends StatelessWidget {
                   child: Text(
                     'Saya Mengerti & Siaga',
                     style: GoogleFonts.inter(
-                      fontSize: 16 * s,
-                      fontWeight: FontWeight.w500,
+                      fontSize: 15.5 * s,
+                      fontWeight: FontWeight.w600,
                       color: Colors.white,
                     ),
                   ),
@@ -270,7 +335,13 @@ class _PeringatanGawatBody extends StatelessWidget {
               ),
               SizedBox(height: 10 * s),
               TextButton.icon(
-                onPressed: muted ? null : onMute,
+                onPressed: muted
+                    ? null
+                    : () {
+                        SirenService.instance.stop();
+                        SirenService.instance.stopVibrate();
+                        onMute();
+                      },
                 icon: Icon(
                   muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
                   size: 18 * s,
@@ -282,6 +353,23 @@ class _PeringatanGawatBody extends StatelessWidget {
                     fontSize: 13 * s,
                     fontWeight: FontWeight.w600,
                     color: muted ? const Color(0xFF8A9691) : _redText,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () {
+                  AlertCooldownManager.instance.snooze(const Duration(hours: 1));
+                  SirenService.instance.stop();
+                  SirenService.instance.stopVibrate();
+                  VoiceService.instance.stopSpeaking();
+                  Navigator.of(context).pop();
+                },
+                child: Text(
+                  'Jangan ingatkan lagi selama 1 jam',
+                  style: GoogleFonts.inter(
+                    fontSize: 11.5 * s,
+                    color: const Color(0xFF6B7A74),
+                    decoration: TextDecoration.underline,
                   ),
                 ),
               ),
@@ -426,7 +514,7 @@ class AirAlertLayer extends StatefulWidget {
     super.key,
     this.alertIspu,
     this.alertRegion = '',
-    this.threshold = 150,
+    this.threshold = 300,
     this.showDailyNotification = true,
     this.dailyIspu = 211,
     this.bannerDuration = const Duration(seconds: 7),
@@ -452,7 +540,7 @@ class _AirAlertLayerState extends State<AirAlertLayer> {
     if (!mounted) return;
 
     final int? ispu = widget.alertIspu;
-    if (ispu != null && ispu > widget.threshold) {
+    if (ispu != null && ispu >= widget.threshold) {
       await PeringatanGawatDialog.show(
         context,
         ispu: ispu,
